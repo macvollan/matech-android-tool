@@ -1,16 +1,16 @@
-# ⚡ MaTech Android Tool v2.2
+# ⚡ MacTech Android Tool v2.2
 ### *Enterprise Diagnostic, Hardware Authenticity & Forensic ADB Suite*
 **Engineered by MacTech Solutions Lab** | **Author:** Mark Vollan Barracks (`markvollanbarracks@gmail.com`)
 
 [![License](https://img.shields.io/badge/License-Proprietary%20%2F%20Lab-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-brightgreen.svg)](https://microsoft.com/windows)
-[![PayPal Donate](https://img.shields.io/badge/Donate-PayPal-0070BA.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MaTech+Android+Tool+Development)
+[![PayPal Donate](https://img.shields.io/badge/Donate-PayPal-0070BA.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MacTech+Android+Tool+Development)
 
 ---
 
 ## 📌 Overview
 
-**MaTech Android Tool** is a high-performance Windows PC application designed for computer repair technicians, digital forensics investigators, and power users. It provides low-level Android hardware interrogation, real-time app inspection, solid-state storage TRIM/defragmentation, broken-screen data extraction, and an industry-first **Forensic Fake Phone & Clone Detector**.
+**MacTech Android Tool** is a high-performance Windows PC application designed for computer repair technicians, digital forensics investigators, and power users. It provides low-level Android hardware interrogation, real-time app inspection, solid-state storage TRIM/defragmentation, broken-screen data extraction, and an industry-first **Forensic Fake Phone & Clone Detector**.
 
 All ADB, MTP, and shell operations execute **completely silently** in the background using native Windows process suppression flags (`STARTF_USESHOWWINDOW` + `CREATE_NO_WINDOW`), preventing any command prompt flashing.
 
@@ -69,7 +69,7 @@ Counterfeit devices (fake Samsung Galaxy S24 Ultra, clone iPhone 15/16 Pro Max r
 ## ☕ Support the Developer & Lab
 
 If this tool assisted your diagnostics or recovered valuable client data, please consider supporting MacTech Solutions Lab:
-- **PayPal Donation Link:** [Donate to MacTech Solutions Lab](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MaTech+Android+Tool+Development)
+- **PayPal Donation Link:** [Donate to MacTech Solutions Lab](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MacTech+Android+Tool+Development)
 - **PayPal Direct Account:** `markvollanbarracks@gmail.com`
 
 ---
@@ -83,8 +83,8 @@ If this tool assisted your diagnostics or recovered valuable client data, please
 
 ```bash
 # Clone the repository
-git clone https://github.com/macvollan/matech-android-tool.git
-cd matech-android-tool
+git clone https://github.com/macvollan/mactech-android-tool.git
+cd mactech-android-tool
 
 # Install dependencies
 pip install -r requirements.txt

@@ -1,6 +1,6 @@
 """
 MacTech Theme & Styling Configuration
-Dark Forensic Palette for MaTech Android Tool
+Dark Forensic Palette for MacTech Android Tool
 """
 
 THEME = {

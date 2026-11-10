@@ -1,5 +1,5 @@
 """
-MaTech Android Tool - Main Entry Point
+MacTech Android Tool - Main Entry Point
 MacTech Solutions Lab
 Automated Android Diagnostic, Authenticity Forensic Suite & ADB Controller
 """
@@ -21,7 +21,7 @@ def main():
         app = MainWindow(adb_manager=adb_mgr)
         app.mainloop()
     except Exception as e:
-        print(f"Error launching MaTech Android Tool: {e}")
+        print(f"Error launching MacTech Android Tool: {e}")
         import traceback
         traceback.print_exc()
 

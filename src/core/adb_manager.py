@@ -1,5 +1,5 @@
 """
-MaTech Android Tool - ADB & Diagnostic Engine
+MacTech Android Tool - ADB & Diagnostic Engine
 Engineered for MacTech Solutions Lab
 Silently executes all ADB, fastboot, and MTP commands without console window flashing.
 """

@@ -1,5 +1,5 @@
 """
-PyInstaller Compilation Script for MaTech Android Tool
+PyInstaller Compilation Script for MacTech Android Tool
 MacTech Solutions Lab
 """
 
@@ -12,7 +12,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def build():
     print("=" * 60)
-    print("  MaTech Android Tool - Standalone Executable Builder")
+    print("  MacTech Android Tool - Standalone Executable Builder")
     print("  MacTech Solutions Lab")
     print("=" * 60)
 
@@ -33,9 +33,9 @@ def build():
 
     cmd = [
         sys.executable, "-m", "PyInstaller",
-        "--name=MaTech_Android_Tool",
+        "--name=MacTech_Android_Tool",
         "--windowed", # No CMD window
-        "--onedir", # Directory distribution or onefile
+        "--onedir", # Directory distribution
         f"--add-data={ctk_path};customtkinter",
         f"--add-data={bin_path};bin",
         f"--add-data={assets_path};assets",
@@ -50,7 +50,7 @@ def build():
     res = subprocess.run(cmd, cwd=BASE_DIR)
     if res.returncode == 0:
         print("\n✔ PyInstaller build succeeded!")
-        dist_dir = os.path.join(BASE_DIR, "dist", "MaTech_Android_Tool")
+        dist_dir = os.path.join(BASE_DIR, "dist", "MacTech_Android_Tool")
         print(f"Artifacts located at: {dist_dir}")
         return True
     else:

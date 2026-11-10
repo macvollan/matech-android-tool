@@ -1,5 +1,5 @@
 """
-MaTech Android Tool - Main Window
+MacTech Android Tool - Main Window
 MacTech Solutions Lab
 Modern, high-performance, dark forensic interface using CustomTkinter
 """
@@ -22,7 +22,7 @@ except ImportError:
 from ..core.adb_manager import ADBManager
 from .theme import THEME
 
-PAYPAL_DONATION_URL = "https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MaTech+Android+Tool+Development"
+PAYPAL_DONATION_URL = "https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MacTech+Android+Tool+Development"
 PAYPAL_EMAIL = "markvollanbarracks@gmail.com"
 
 class MainWindow(ctk.CTk if ctk else object):
@@ -34,7 +34,7 @@ class MainWindow(ctk.CTk if ctk else object):
         self.adb = adb_manager or ADBManager()
 
         # Window setup
-        self.title("MaTech Android Tool v2.2 - Enterprise Forensic & Diagnostic Suite")
+        self.title("MacTech Android Tool v2.2 - Enterprise Forensic & Diagnostic Suite")
         self.geometry("1240x820")
         self.minsize(1080, 720)
         ctk.set_appearance_mode("Dark")
@@ -84,7 +84,7 @@ class MainWindow(ctk.CTk if ctk else object):
 
         title_lbl = ctk.CTkLabel(
             brand_frame,
-            text="⚡ MaTech Android",
+            text="⚡ MacTech Android",
             font=ctk.CTkFont(family=THEME["font_family"], size=18, weight="bold"),
             text_color=THEME["text_main"]
         )
@@ -1385,7 +1385,7 @@ class MainWindow(ctk.CTk if ctk else object):
         btn_send_type.pack(side="right")
 
     def _capture_screen_preview(self):
-        tmp_path = os.path.join(os.environ.get("TEMP", "."), "matech_screen_tmp.png")
+        tmp_path = os.path.join(os.environ.get("TEMP", "."), "mactech_screen_tmp.png")
         def _cap():
             ok, res = self.adb.capture_screenshot(tmp_path)
             if ok and os.path.exists(tmp_path):
@@ -1475,7 +1475,7 @@ class MainWindow(ctk.CTk if ctk else object):
             corner_radius=8
         )
         self.term_output.pack(fill="both", expand=True, pady=(0, 10))
-        self.term_output.insert("end", "=== MaTech Android Tool - Silent ADB Terminal Console ===\nType shell commands below or use ADB directly. Window flashing is 100% disabled.\n\n")
+        self.term_output.insert("end", "=== MacTech Android Tool - Silent ADB Terminal Console ===\nType shell commands below or use ADB directly. Window flashing is 100% disabled.\n\n")
 
         # Command Input Bar
         input_bar = ctk.CTkFrame(container, fg_color="transparent")
@@ -1673,7 +1673,7 @@ class MainWindow(ctk.CTk if ctk else object):
 
         ctk.CTkLabel(
             dialog,
-            text="MaTech Android Tool is crafted by Mark Vollan Barracks & MacTech Solutions Lab.\nYour support helps maintain continuous updates, new device security bypasses, and free tools for technicians worldwide.",
+            text="MacTech Android Tool is crafted by Mark Vollan Barracks & MacTech Solutions Lab.\nYour support helps maintain continuous updates, new device security bypasses, and free tools for technicians worldwide.",
             font=ctk.CTkFont(family=THEME["font_family"], size=12),
             text_color=THEME["text_secondary"],
             wraplength=540,

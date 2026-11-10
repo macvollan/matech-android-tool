@@ -1,6 +1,6 @@
 """
 MacTech Solutions Lab - Automated GitHub Sync & Release Provisioner
-Repository: https://github.com/macvollan/matech-android-tool
+Repository: https://github.com/macvollan/mactech-android-tool
 """
 
 import os
@@ -17,7 +17,7 @@ GH_BIN = r"C:\Program Files\GitHub CLI\gh.exe"
 if not os.path.exists(GH_BIN):
     GH_BIN = "gh"
 
-REPO_NAME = "macvollan/matech-android-tool"
+REPO_NAME = "macvollan/mactech-android-tool"
 
 def sync(commit_msg: str = None):
     print("=" * 60)
@@ -26,7 +26,7 @@ def sync(commit_msg: str = None):
     print("=" * 60)
 
     if not commit_msg:
-        commit_msg = "Release: MaTech Android Tool v2.2 - Forensic Authenticity & ADB Diagnostic Suite"
+        commit_msg = "Release: MacTech Android Tool v2.2 - Forensic Authenticity & ADB Diagnostic Suite"
 
     # 1. Initialize git if not present
     if not os.path.exists(os.path.join(BASE_DIR, ".git")):
@@ -52,7 +52,7 @@ def sync(commit_msg: str = None):
     remotes = subprocess.run([GIT_BIN, "remote"], cwd=BASE_DIR, capture_output=True, text=True).stdout
     if "origin" not in remotes:
         print("[3/4] Creating remote repository on GitHub via gh CLI...")
-        res = subprocess.run([GH_BIN, "repo", "create", REPO_NAME, "--public", "--description", "MaTech Android Tool v2.2 - Enterprise Diagnostic, Fake Phone & Clone Detector, Forensic ADB & MTP Suite", "--confirm"], cwd=BASE_DIR, capture_output=True, text=True)
+        res = subprocess.run([GH_BIN, "repo", "create", REPO_NAME, "--public", "--description", "MacTech Android Tool v2.2 - Enterprise Diagnostic, Fake Phone & Clone Detector, Forensic ADB & MTP Suite", "--confirm"], cwd=BASE_DIR, capture_output=True, text=True)
         print(res.stdout or res.stderr)
         subprocess.run([GIT_BIN, "remote", "add", "origin", f"https://github.com/{REPO_NAME}.git"], cwd=BASE_DIR)
 
