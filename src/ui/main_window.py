@@ -41,6 +41,15 @@ class MainWindow(ctk.CTk if ctk else object):
         ctk.set_default_color_theme("blue")
         self.configure(fg_color=THEME["bg_main"])
 
+        # Set window icon
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ico_path = os.path.join(base_dir, "assets", "icon.ico")
+        if os.path.exists(ico_path):
+            try:
+                self.iconbitmap(ico_path)
+            except Exception:
+                pass
+
         # State variables
         self.current_view_name = "dashboard"
         self.is_monitoring = True
@@ -78,23 +87,38 @@ class MainWindow(ctk.CTk if ctk else object):
         self.sidebar_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
         self.sidebar_frame.grid_rowconfigure(11, weight=1)
 
-        # Header / Brand
+        # Header / Brand with Android Logo
         brand_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
-        brand_frame.grid(row=0, column=0, padx=20, pady=(20, 16), sticky="ew")
+        brand_frame.grid(row=0, column=0, padx=16, pady=(16, 14), sticky="ew")
+
+        # Load Android Cyber Logo
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        png_path = os.path.join(base_dir, "assets", "icon.png")
+        if os.path.exists(png_path):
+            try:
+                logo_pil = Image.open(png_path)
+                self.logo_sidebar_ctk = ctk.CTkImage(light_image=logo_pil, dark_image=logo_pil, size=(42, 42))
+                logo_lbl = ctk.CTkLabel(brand_frame, image=self.logo_sidebar_ctk, text="")
+                logo_lbl.pack(side="left", padx=(0, 10))
+            except Exception:
+                pass
+
+        titles_box = ctk.CTkFrame(brand_frame, fg_color="transparent")
+        titles_box.pack(side="left", fill="x", expand=True)
 
         title_lbl = ctk.CTkLabel(
-            brand_frame,
-            text="⚡ MacTech Android",
-            font=ctk.CTkFont(family=THEME["font_family"], size=18, weight="bold"),
+            titles_box,
+            text="MacTech Android",
+            font=ctk.CTkFont(family=THEME["font_family"], size=16, weight="bold"),
             text_color=THEME["text_main"]
         )
         title_lbl.pack(anchor="w")
 
         sub_lbl = ctk.CTkLabel(
-            brand_frame,
-            text="MacTech Solutions Lab Forensic Suite",
+            titles_box,
+            text="Forensic Suite v2.2",
             font=ctk.CTkFont(family=THEME["font_family"], size=11),
-            text_color=THEME["accent_cyan"]
+            text_color="#3DDC84" # Neon Android Green
         )
         sub_lbl.pack(anchor="w")
 
