@@ -88,6 +88,36 @@ class ADBManager:
         """Executes an adb shell command."""
         return self.run_adb(["shell", shell_cmd], timeout=timeout, device_id=device_id)
 
+    def execute_smart_command(self, cmd_line: str, timeout: int = 40, device_id: Optional[str] = None) -> Tuple[int, str, str]:
+        """
+        Smart command parser for terminal inputs:
+        - If command begins with 'adb ', strips 'adb ' and runs as direct adb command.
+        - If command begins with 'fastboot ', runs as direct fastboot command.
+        - Otherwise, executes through 'adb shell <cmd>'.
+        All executions run 100% silently without console window popups.
+        """
+        clean_cmd = cmd_line.strip()
+        if not clean_cmd:
+            return 0, "", ""
+        
+        if clean_cmd.lower().startswith("adb "):
+            import shlex
+            try:
+                parts = shlex.split(clean_cmd[4:].strip())
+            except Exception:
+                parts = clean_cmd[4:].strip().split()
+            return self.run_adb(parts, timeout=timeout, device_id=device_id)
+            
+        if clean_cmd.lower().startswith("fastboot "):
+            import shlex
+            try:
+                parts = shlex.split(clean_cmd)
+            except Exception:
+                parts = clean_cmd.split()
+            return self.run_cmd(parts, timeout=timeout)
+            
+        return self.run_shell(clean_cmd, timeout=timeout, device_id=device_id)
+
     def _ensure_server_running(self):
         """Starts ADB server silently if not already running."""
         def _start():

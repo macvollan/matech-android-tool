@@ -19,6 +19,10 @@ THEME = {
     
     "success": "#10B981",
     "success_hover": "#059669",
+    "android_green": "#3DDC84",
+    "android_green_hover": "#2dbb6d",
+    "accent_orange": "#F97316",
+    "accent_orange_hover": "#ea580c",
     "warning": "#F59E0B",
     "warning_hover": "#D97706",
     "danger": "#EF4444",

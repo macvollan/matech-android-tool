@@ -20,9 +20,12 @@ except ImportError:
     ctk = None
 
 from ..core.adb_manager import ADBManager
+from ..core.command_library import COMMAND_CATEGORIES, VAST_COMMANDS, search_commands
 from .theme import THEME
 
-PAYPAL_DONATION_URL = "https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MacTech+Android+Tool+Development"
+PAYPAL_DONATION_BASE_URL = "https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MacTech+Android+Tool+Development"
+DEFAULT_DONATION_AMOUNT = "3.00"
+PAYPAL_DONATION_URL = f"{PAYPAL_DONATION_BASE_URL}&amount={DEFAULT_DONATION_AMOUNT}"
 PAYPAL_EMAIL = "markvollanbarracks@gmail.com"
 
 class MainWindow(ctk.CTk if ctk else object):
@@ -56,6 +59,12 @@ class MainWindow(ctk.CTk if ctk else object):
         self.installed_packages_cache: List[Dict[str, str]] = []
         self.cached_overview: Dict[str, Any] = {}
         self.status_data: Dict[str, Any] = {"connection": "DISCONNECTED", "message": "Initializing..."}
+
+        # Terminal state & command history
+        self.command_history: List[str] = []
+        self.history_index: int = -1
+        self.current_cmd_category: str = "All Commands"
+        self.selected_donation_amount: str = DEFAULT_DONATION_AMOUNT
 
         # Setup GUI Components
         self._setup_layout()
@@ -181,7 +190,7 @@ class MainWindow(ctk.CTk if ctk else object):
 
         donate_btn = ctk.CTkButton(
             donate_frame,
-            text="Donate via PayPal",
+            text="Donate via PayPal ($3)",
             font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
             fg_color="#0070BA",
             hover_color="#005ea6",
@@ -254,11 +263,11 @@ class MainWindow(ctk.CTk if ctk else object):
 
         self.btn_top_donate = ctk.CTkButton(
             actions_box,
-            text="☕ Donate",
+            text="☕ Donate ($3)",
             font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
             fg_color="#0070BA",
             hover_color="#005ea6",
-            width=85,
+            width=105,
             height=32,
             command=self.open_donation_modal
         )
@@ -498,6 +507,38 @@ class MainWindow(ctk.CTk if ctk else object):
                 command=lambda m=mode: self._confirm_reboot(m)
             )
             btn.pack(side="left", padx=5, expand=True, fill="x")
+
+        # Row 4: One-Click Engineering & Diagnostics Shortcuts
+        wf_frame = ctk.CTkFrame(scroll, fg_color=THEME["bg_card"], border_width=1, border_color=THEME["border"], corner_radius=10)
+        wf_frame.pack(fill="x", pady=(0, 14))
+
+        wf_title = ctk.CTkLabel(wf_frame, text="🚀 One-Click Technician Shortcuts", font=ctk.CTkFont(family=THEME["font_family"], size=14, weight="bold"), text_color=THEME["text_main"])
+        wf_title.pack(anchor="w", padx=16, pady=(14, 10))
+
+        wf_box = ctk.CTkFrame(wf_frame, fg_color="transparent")
+        wf_box.pack(fill="x", padx=16, pady=(0, 16))
+
+        shortcuts = [
+            ("🔓 Wake & Unlock", lambda: threading.Thread(target=self.adb.attempt_force_usb_debugging, daemon=True).start(), THEME["primary"]),
+            ("🚀 Current App", self.show_current_app, THEME["accent_cyan"]),
+            ("🔍 Clone Inspector", self.show_fake_detector, THEME["danger"]),
+            ("⚡ Storage TRIM", self.show_optimize, THEME["purple"]),
+            ("💾 Data Recovery", self.show_data_recovery, THEME["warning"]),
+            ("💻 Silent Terminal (60+ Cmds)", self.show_terminal, THEME["android_green"]),
+        ]
+
+        for label, cmd_fn, color in shortcuts:
+            s_btn = ctk.CTkButton(
+                wf_box,
+                text=label,
+                font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
+                fg_color=color,
+                hover_color=THEME["border_highlight"],
+                height=34,
+                corner_radius=6,
+                command=cmd_fn
+            )
+            s_btn.pack(side="left", padx=4, expand=True, fill="x")
 
     def _confirm_reboot(self, mode: str):
         if messagebox.askyesno("Confirm Reboot", f"Are you sure you want to issue reboot command ({mode.upper()}) to the device?"):
@@ -1444,6 +1485,10 @@ class MainWindow(ctk.CTk if ctk else object):
     # VIEW 8: Silent ADB Terminal Console
     # =========================================================================
 
+    # =========================================================================
+    # VIEW 8: Silent ADB Terminal Console & Vast Command Deck
+    # =========================================================================
+
     def show_terminal(self):
         self._highlight_nav("terminal")
         self._clear_content()
@@ -1451,34 +1496,242 @@ class MainWindow(ctk.CTk if ctk else object):
         container = ctk.CTkFrame(self.content_container, fg_color="transparent")
         container.pack(fill="both", expand=True)
 
-        h_box = ctk.CTkFrame(container, fg_color="transparent")
-        h_box.pack(fill="x", pady=(0, 10))
+        # 2-Column Responsive Workspace:
+        # Col 0: Command Library Dock (width ~380px)
+        # Col 1: Interactive Terminal Console & Output (expanding)
+        container.grid_columnconfigure(0, weight=0, minsize=380)
+        container.grid_columnconfigure(1, weight=1)
+        container.grid_rowconfigure(0, weight=1)
+
+        # -------------------------------------------------------------
+        # Left Panel: Vast Command Library Dock
+        # -------------------------------------------------------------
+        deck_frame = ctk.CTkFrame(container, fg_color=THEME["bg_card"], border_width=1, border_color=THEME["border"], corner_radius=12)
+        deck_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        deck_frame.grid_rowconfigure(3, weight=1)
+        deck_frame.grid_columnconfigure(0, weight=1)
+
+        # Header with Count Badge
+        deck_hdr = ctk.CTkFrame(deck_frame, fg_color="transparent")
+        deck_hdr.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
 
         ctk.CTkLabel(
-            h_box,
-            text="💻 Silent Interactive ADB & Shell Terminal",
-            font=ctk.CTkFont(family=THEME["font_family"], size=20, weight="bold"),
+            deck_hdr,
+            text="📚 Command Deck",
+            font=ctk.CTkFont(family=THEME["font_family"], size=15, weight="bold"),
             text_color=THEME["text_main"]
         ).pack(side="left")
 
-        # Quick Preset Pills
-        pills_box = ctk.CTkFrame(container, fg_color="transparent")
-        pills_box.pack(fill="x", pady=(0, 10))
+        self.cmd_count_badge = ctk.CTkLabel(
+            deck_hdr,
+            text=f"{len(VAST_COMMANDS)} Ready",
+            font=ctk.CTkFont(family=THEME["font_mono"], size=10, weight="bold"),
+            fg_color=THEME["bg_card_alt"],
+            text_color=THEME["android_green"],
+            corner_radius=6,
+            padx=8,
+            pady=2
+        )
+        self.cmd_count_badge.pack(side="right")
 
-        presets = [
-            ("getprop", "getprop"),
-            ("df -h", "df -h"),
+        # Category Selector Dropdown
+        self.category_var = ctk.StringVar(value=self.current_cmd_category)
+        cat_menu = ctk.CTkOptionMenu(
+            deck_frame,
+            values=COMMAND_CATEGORIES,
+            variable=self.category_var,
+            font=ctk.CTkFont(family=THEME["font_family"], size=12),
+            fg_color=THEME["bg_card_alt"],
+            button_color=THEME["primary"],
+            button_hover_color=THEME["primary_hover"],
+            command=self._on_command_category_changed
+        )
+        cat_menu.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
+
+        # Real-time Search / Filter Input
+        self.cmd_search_entry = ctk.CTkEntry(
+            deck_frame,
+            placeholder_text="🔍 Filter 60+ commands (e.g. battery, dpi)...",
+            height=32,
+            font=ctk.CTkFont(family=THEME["font_family"], size=12),
+            fg_color=THEME["bg_input"],
+            border_color=THEME["border"]
+        )
+        self.cmd_search_entry.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 10))
+        self.cmd_search_entry.bind("<KeyRelease>", lambda e: self._filter_command_cards())
+
+        # Scrollable Command List
+        self.cmd_list_scroll = ctk.CTkScrollableFrame(deck_frame, fg_color="transparent")
+        self.cmd_list_scroll.grid(row=3, column=0, sticky="nsew", padx=10, pady=(0, 10))
+
+        # Render initial list
+        self._render_command_cards(VAST_COMMANDS)
+
+        # -------------------------------------------------------------
+        # Right Panel: Interactive Terminal Console
+        # -------------------------------------------------------------
+        console_frame = ctk.CTkFrame(container, fg_color="transparent")
+        console_frame.grid(row=0, column=1, sticky="nsew")
+        console_frame.grid_rowconfigure(1, weight=1)
+        console_frame.grid_columnconfigure(0, weight=1)
+
+        # Top Control Toolbar
+        top_bar = ctk.CTkFrame(console_frame, fg_color=THEME["bg_card"], border_width=1, border_color=THEME["border"], corner_radius=10, height=44)
+        top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        dev_serial = self.adb.selected_device or "Active Device"
+        conn_state = self.status_data.get("connection", "DISCONNECTED")
+        pill_color = THEME["success"] if conn_state == "AUTHORIZED" else (THEME["warning"] if conn_state == "UNAUTHORIZED" else THEME["danger"])
+
+        dev_box = ctk.CTkFrame(top_bar, fg_color="transparent")
+        dev_box.pack(side="left", padx=12, pady=6)
+
+        ctk.CTkLabel(dev_box, text="●", text_color=pill_color, font=ctk.CTkFont(size=14)).pack(side="left", padx=(0, 4))
+        self.term_dev_lbl = ctk.CTkLabel(
+            dev_box,
+            text=f"Target: {dev_serial} ({conn_state})",
+            font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
+            text_color=THEME["text_main"]
+        )
+        self.term_dev_lbl.pack(side="left")
+
+        # Action Buttons
+        actions_bar = ctk.CTkFrame(top_bar, fg_color="transparent")
+        actions_bar.pack(side="right", padx=10, pady=6)
+
+        btn_clear = ctk.CTkButton(
+            actions_bar,
+            text="🧹 Clear",
+            width=70,
+            height=28,
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            command=self._clear_terminal_output
+        )
+        btn_clear.pack(side="left", padx=3)
+
+        btn_copy = ctk.CTkButton(
+            actions_bar,
+            text="📋 Copy",
+            width=70,
+            height=28,
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            command=self._copy_terminal_output
+        )
+        btn_copy.pack(side="left", padx=3)
+
+        btn_save = ctk.CTkButton(
+            actions_bar,
+            text="💾 Save Log",
+            width=80,
+            height=28,
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            command=self._save_terminal_log
+        )
+        btn_save.pack(side="left", padx=3)
+
+        btn_restart = ctk.CTkButton(
+            actions_bar,
+            text="🔄 Restart ADB",
+            width=95,
+            height=28,
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["primary"],
+            hover_color=THEME["primary_hover"],
+            command=self._restart_adb_from_term
+        )
+        btn_restart.pack(side="left", padx=3)
+
+        # Terminal Textbox
+        self.term_output = ctk.CTkTextbox(
+            console_frame,
+            fg_color="#05080E",
+            text_color="#10B981", # Hacker Green
+            font=ctk.CTkFont(family=THEME["font_mono"], size=12),
+            border_width=1,
+            border_color=THEME["border"],
+            corner_radius=10,
+            wrap="word"
+        )
+        self.term_output.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+
+        banner = (
+            "===============================================================================\n"
+            "               MACTECH ANDROID TOOL v2.2 - SILENT ADB TERMINAL CONSOLE         \n"
+            "               MacTech Solutions Lab • 100% Background Execution (Zero Flash)  \n"
+            "===============================================================================\n"
+            "Type any shell or ADB command below (e.g. 'getprop', 'adb devices', 'df -h')   \n"
+            "Or click any command in the vast Command Deck on the left to run instantly.    \n"
+            "Use UP and DOWN arrow keys in the prompt to navigate your command history.     \n\n"
+        )
+        self.term_output.insert("end", banner)
+
+        # Bottom Input Dock
+        bottom_dock = ctk.CTkFrame(console_frame, fg_color="transparent")
+        bottom_dock.grid(row=2, column=0, sticky="ew")
+
+        # Command Entry Bar
+        input_bar = ctk.CTkFrame(bottom_dock, fg_color="transparent")
+        input_bar.pack(fill="x", pady=(0, 6))
+
+        prompt_lbl = ctk.CTkLabel(
+            input_bar,
+            text="android:~$",
+            font=ctk.CTkFont(family=THEME["font_mono"], size=13, weight="bold"),
+            text_color=THEME["accent_cyan"],
+            width=80,
+            anchor="w"
+        )
+        prompt_lbl.pack(side="left", padx=(4, 6))
+
+        self.term_input = ctk.CTkEntry(
+            input_bar,
+            placeholder_text="Enter command (e.g., pm list packages, cat /proc/meminfo, reboot recovery)...",
+            height=38,
+            fg_color=THEME["bg_input"],
+            border_color=THEME["border"],
+            font=ctk.CTkFont(family=THEME["font_mono"], size=12)
+        )
+        self.term_input.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.term_input.bind("<Return>", lambda e: self._execute_terminal_input())
+        self.term_input.bind("<Up>", self._history_prev)
+        self.term_input.bind("<Down>", self._history_next)
+
+        btn_run = ctk.CTkButton(
+            input_bar,
+            text="▶ Execute",
+            width=95,
+            height=38,
+            font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
+            fg_color=THEME["primary"],
+            hover_color=THEME["primary_hover"],
+            command=self._execute_terminal_input
+        )
+        btn_run.pack(side="right")
+
+        # Quick Action Pills Row
+        pills_bar = ctk.CTkFrame(bottom_dock, fg_color="transparent")
+        pills_bar.pack(fill="x")
+
+        quick_pills = [
             ("dumpsys battery", "dumpsys battery"),
-            ("ip addr", "ip addr show"),
-            ("top (CPU)", "top -n 1 -m 5"),
+            ("df -h", "df -h"),
+            ("getprop", "getprop"),
+            ("top -n 1", "top -n 1 -m 6"),
             ("ps -A", "ps -A"),
-            ("logcat dump", "logcat -d -t 50"),
-            ("clear", "clear")
+            ("/proc/meminfo", "cat /proc/meminfo"),
+            ("/proc/cpuinfo", "cat /proc/cpuinfo"),
+            ("logcat -d", "logcat -d -t 50")
         ]
 
-        for label, cmd_str in presets:
-            btn = ctk.CTkButton(
-                pills_box,
+        for label, cmd_str in quick_pills:
+            p_btn = ctk.CTkButton(
+                pills_bar,
                 text=label,
                 font=ctk.CTkFont(family=THEME["font_mono"], size=11),
                 fg_color=THEME["bg_card"],
@@ -1486,51 +1739,155 @@ class MainWindow(ctk.CTk if ctk else object):
                 height=26,
                 command=lambda c=cmd_str: self._run_quick_cmd(c)
             )
-            btn.pack(side="left", padx=4)
+            p_btn.pack(side="left", padx=3)
 
-        # Output Text Box
-        self.term_output = ctk.CTkTextbox(
-            container,
-            fg_color="#05080E",
-            text_color="#10B981",
-            font=ctk.CTkFont(family=THEME["font_mono"], size=12),
-            border_width=1,
-            border_color=THEME["border"],
-            corner_radius=8
-        )
-        self.term_output.pack(fill="both", expand=True, pady=(0, 10))
-        self.term_output.insert("end", "=== MacTech Android Tool - Silent ADB Terminal Console ===\nType shell commands below or use ADB directly. Window flashing is 100% disabled.\n\n")
+    def _on_command_category_changed(self, category: str):
+        self.current_cmd_category = category
+        self._filter_command_cards()
 
-        # Command Input Bar
-        input_bar = ctk.CTkFrame(container, fg_color="transparent")
-        input_bar.pack(fill="x")
+    def _filter_command_cards(self):
+        query = self.cmd_search_entry.get().strip() if hasattr(self, 'cmd_search_entry') else ""
+        category = self.category_var.get() if hasattr(self, 'category_var') else "All Commands"
+        filtered = search_commands(query, category)
+        self._render_command_cards(filtered)
+        if hasattr(self, 'cmd_count_badge'):
+            self.cmd_count_badge.configure(text=f"{len(filtered)} Found")
 
-        self.term_input = ctk.CTkEntry(
-            input_bar,
-            placeholder_text="Enter shell command (e.g., pm list packages, cat /proc/meminfo)...",
-            height=36,
-            fg_color=THEME["bg_input"],
-            border_color=THEME["border"],
-            font=ctk.CTkFont(family=THEME["font_mono"], size=12)
-        )
-        self.term_input.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.term_input.bind("<Return>", lambda e: self._execute_terminal_input())
+    def _render_command_cards(self, commands_list: List[Dict[str, str]]):
+        for widget in self.cmd_list_scroll.winfo_children():
+            widget.destroy()
 
-        btn_run = ctk.CTkButton(
-            input_bar,
-            text="Execute",
-            width=85,
-            height=36,
-            font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
-            fg_color=THEME["primary"],
-            command=self._execute_terminal_input
-        )
-        btn_run.pack(side="right")
+        if not commands_list:
+            ctk.CTkLabel(
+                self.cmd_list_scroll,
+                text="No matching commands found.",
+                font=ctk.CTkFont(family=THEME["font_family"], size=12),
+                text_color=THEME["text_muted"]
+            ).pack(pady=20)
+            return
+
+        level_colors = {
+            "safe": THEME["success"],
+            "medium": THEME["warning"],
+            "advanced": THEME["danger"]
+        }
+
+        for item in commands_list:
+            card = ctk.CTkFrame(
+                self.cmd_list_scroll,
+                fg_color=THEME["bg_card_alt"],
+                border_width=1,
+                border_color=THEME["border"],
+                corner_radius=8
+            )
+            card.pack(fill="x", pady=4, padx=2)
+
+            # Title & Level Badge
+            hdr = ctk.CTkFrame(card, fg_color="transparent")
+            hdr.pack(fill="x", padx=10, pady=(8, 2))
+
+            ctk.CTkLabel(
+                hdr,
+                text=item["name"],
+                font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
+                text_color=THEME["text_main"],
+                anchor="w"
+            ).pack(side="left", fill="x", expand=True)
+
+            level = item.get("level", "safe")
+            badge_color = level_colors.get(level, THEME["success"])
+            ctk.CTkLabel(
+                hdr,
+                text=level.upper(),
+                font=ctk.CTkFont(family=THEME["font_mono"], size=9, weight="bold"),
+                text_color=badge_color,
+                fg_color=THEME["bg_card"],
+                corner_radius=4,
+                padx=6,
+                pady=1
+            ).pack(side="right")
+
+            # Description
+            ctk.CTkLabel(
+                card,
+                text=item["desc"],
+                font=ctk.CTkFont(family=THEME["font_family"], size=10),
+                text_color=THEME["text_secondary"],
+                anchor="w",
+                justify="left",
+                wraplength=310
+            ).pack(fill="x", padx=10, pady=(0, 4))
+
+            # Command Code Box
+            code_box = ctk.CTkFrame(card, fg_color="#07090E", corner_radius=4)
+            code_box.pack(fill="x", padx=10, pady=(0, 6))
+
+            ctk.CTkLabel(
+                code_box,
+                text=item["cmd"],
+                font=ctk.CTkFont(family=THEME["font_mono"], size=10),
+                text_color=THEME["accent_cyan"],
+                anchor="w",
+                padx=6,
+                pady=4
+            ).pack(fill="x")
+
+            # Buttons: Load / Run
+            btn_box = ctk.CTkFrame(card, fg_color="transparent")
+            btn_box.pack(fill="x", padx=10, pady=(0, 8))
+
+            cmd_str = item["cmd"]
+            ctk.CTkButton(
+                btn_box,
+                text="Load in Input",
+                width=90,
+                height=24,
+                font=ctk.CTkFont(family=THEME["font_family"], size=10),
+                fg_color=THEME["bg_card"],
+                hover_color=THEME["border_highlight"],
+                command=lambda c=cmd_str: self._load_command_to_input(c)
+            ).pack(side="left", padx=(0, 6))
+
+            ctk.CTkButton(
+                btn_box,
+                text="Run ▶",
+                width=65,
+                height=24,
+                font=ctk.CTkFont(family=THEME["font_family"], size=10, weight="bold"),
+                fg_color=THEME["primary"],
+                hover_color=THEME["primary_hover"],
+                command=lambda c=cmd_str: self._run_quick_cmd(c)
+            ).pack(side="right")
+
+    def _load_command_to_input(self, cmd_str: str):
+        self.term_input.delete(0, "end")
+        self.term_input.insert(0, cmd_str)
+        self.term_input.focus_set()
+
+    def _history_prev(self, event=None):
+        if not self.command_history:
+            return "break"
+        if self.history_index > 0:
+            self.history_index -= 1
+        elif self.history_index == -1:
+            self.history_index = len(self.command_history) - 1
+        self.term_input.delete(0, "end")
+        self.term_input.insert(0, self.command_history[self.history_index])
+        return "break"
+
+    def _history_next(self, event=None):
+        if not self.command_history:
+            return "break"
+        if self.history_index < len(self.command_history) - 1:
+            self.history_index += 1
+            self.term_input.delete(0, "end")
+            self.term_input.insert(0, self.command_history[self.history_index])
+        else:
+            self.history_index = len(self.command_history)
+            self.term_input.delete(0, "end")
+        return "break"
 
     def _run_quick_cmd(self, cmd_str: str):
-        if cmd_str == "clear":
-            self.term_output.delete("1.0", "end")
-            return
         self.term_input.delete(0, "end")
         self.term_input.insert(0, cmd_str)
         self._execute_terminal_input()
@@ -1540,11 +1897,17 @@ class MainWindow(ctk.CTk if ctk else object):
         if not cmd:
             return
         self.term_input.delete(0, "end")
-        self.term_output.insert("end", f"\n$ {cmd}\n")
+
+        if not self.command_history or self.command_history[-1] != cmd:
+            self.command_history.append(cmd)
+        self.history_index = len(self.command_history)
+
+        self.term_output.insert("end", f"\nandroid:~$ {cmd}\n")
+        self.term_output.see("end")
 
         def _exec():
-            code, out, err = self.adb.run_shell(cmd)
-            res = out if out else err
+            code, out, err = self.adb.execute_smart_command(cmd)
+            res = out if out else (err if err else "[Command completed with no output]")
             self.after(0, self._append_term_output, res)
 
         threading.Thread(target=_exec, daemon=True).start()
@@ -1552,6 +1915,37 @@ class MainWindow(ctk.CTk if ctk else object):
     def _append_term_output(self, text: str):
         self.term_output.insert("end", text + "\n")
         self.term_output.see("end")
+
+    def _clear_terminal_output(self):
+        self.term_output.delete("1.0", "end")
+        self.term_output.insert("end", "=== Terminal Cleared ===\n\n")
+
+    def _copy_terminal_output(self):
+        txt = self.term_output.get("1.0", "end-1c")
+        self._copy_to_clipboard(txt, self)
+
+    def _save_terminal_log(self):
+        txt = self.term_output.get("1.0", "end-1c")
+        path = filedialog.asksaveasfilename(
+            defaultextension=".log",
+            filetypes=[("Log Files", "*.log"), ("Text Files", "*.txt"), ("All Files", "*.*")],
+            title="Save Terminal Output Log"
+        )
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                messagebox.showinfo("Export Successful", f"Terminal log saved to:\n{path}")
+            except Exception as e:
+                messagebox.showerror("Export Failed", str(e))
+
+    def _restart_adb_from_term(self):
+        self._append_term_output("Restarting ADB server silently...")
+        def _r():
+            ok, msg = self.adb.restart_adb_server()
+            res = "ADB server restarted successfully." if ok else f"ADB restart error: {msg}"
+            self.after(0, self._append_term_output, res)
+        threading.Thread(target=_r, daemon=True).start()
 
     # =========================================================================
     # VIEW 9: MTP & Storage Explorer
@@ -1679,10 +2073,10 @@ class MainWindow(ctk.CTk if ctk else object):
         ok, msg = self.adb.attempt_force_usb_debugging()
         messagebox.showinfo("Result", msg, parent=dialog)
 
-    def open_donation_modal(self):
+    def open_donation_modal(self, default_amount: str = "3.00"):
         dialog = ctk.CTkToplevel(self)
         dialog.title("Support MacTech Solutions Lab Development")
-        dialog.geometry("640x480")
+        dialog.geometry("640x540")
         dialog.resizable(False, False)
         dialog.configure(fg_color=THEME["bg_main"])
         dialog.grab_set()
@@ -1693,7 +2087,7 @@ class MainWindow(ctk.CTk if ctk else object):
             text="❤️ Support the Creators & Engineering Lab",
             font=ctk.CTkFont(family=THEME["font_family"], size=18, weight="bold"),
             text_color="#F43F5E"
-        ).pack(pady=(24, 6))
+        ).pack(pady=(22, 6))
 
         ctk.CTkLabel(
             dialog,
@@ -1704,47 +2098,118 @@ class MainWindow(ctk.CTk if ctk else object):
             justify="center"
         ).pack(padx=20, pady=(0, 16))
 
-        # PayPal Card
-        card = ctk.CTkFrame(dialog, fg_color=THEME["bg_card"], border_width=1, border_color=THEME["border"], corner_radius=10)
-        card.pack(fill="x", padx=30, pady=(0, 16))
+        # Contribution Tier Selection Card
+        tier_card = ctk.CTkFrame(dialog, fg_color=THEME["bg_card"], border_width=1, border_color=THEME["border"], corner_radius=12)
+        tier_card.pack(fill="x", padx=30, pady=(0, 14))
 
         ctk.CTkLabel(
-            card,
-            text="Official PayPal Donation Channel:",
+            tier_card,
+            text="Select Support Amount (Default: $3.00 USD):",
             font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
             text_color=THEME["text_muted"]
-        ).pack(pady=(14, 4))
+        ).pack(anchor="w", padx=16, pady=(12, 8))
 
-        email_lbl = ctk.CTkLabel(
-            card,
-            text=PAYPAL_EMAIL,
-            font=ctk.CTkFont(family=THEME["font_mono"], size=15, weight="bold"),
-            text_color=THEME["accent_cyan"]
+        # Presets Row
+        amounts_row = ctk.CTkFrame(tier_card, fg_color="transparent")
+        amounts_row.pack(fill="x", padx=16, pady=(0, 10))
+
+        self.selected_donation_amount = default_amount
+        preset_btns = {}
+        presets = [("☕ $3 (Coffee)", "3.00"), ("⚡ $5", "5.00"), ("🚀 $10", "10.00"), ("💎 $25", "25.00")]
+
+        def _select_amount(amt_val: str):
+            self.selected_donation_amount = amt_val
+            for val, btn in preset_btns.items():
+                if val == amt_val:
+                    btn.configure(fg_color=THEME["primary"], text_color="#FFFFFF")
+                else:
+                    btn.configure(fg_color=THEME["bg_card_alt"], text_color=THEME["text_secondary"])
+            btn_donate_action.configure(text=f"🌐 Donate via PayPal (${amt_val})")
+            custom_entry.delete(0, "end")
+            custom_entry.insert(0, amt_val)
+
+        for label, val in presets:
+            b = ctk.CTkButton(
+                amounts_row,
+                text=label,
+                font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold" if val == default_amount else "normal"),
+                fg_color=THEME["primary"] if val == default_amount else THEME["bg_card_alt"],
+                hover_color=THEME["border_highlight"],
+                height=34,
+                command=lambda v=val: _select_amount(v)
+            )
+            b.pack(side="left", padx=4, expand=True, fill="x")
+            preset_btns[val] = b
+
+        # Custom Amount Row
+        custom_row = ctk.CTkFrame(tier_card, fg_color="transparent")
+        custom_row.pack(fill="x", padx=16, pady=(0, 14))
+
+        ctk.CTkLabel(
+            custom_row,
+            text="Or Custom Amount ($ USD):",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            text_color=THEME["text_muted"]
+        ).pack(side="left", padx=(0, 8))
+
+        custom_entry = ctk.CTkEntry(
+            custom_row,
+            width=100,
+            height=30,
+            font=ctk.CTkFont(family=THEME["font_mono"], size=12, weight="bold"),
+            fg_color=THEME["bg_input"],
+            border_color=THEME["border"]
         )
-        email_lbl.pack(pady=(0, 10))
+        custom_entry.insert(0, default_amount)
+        custom_entry.pack(side="left")
 
-        btn_row = ctk.CTkFrame(card, fg_color="transparent")
-        btn_row.pack(pady=(0, 16))
+        def _on_custom_change(e):
+            val = custom_entry.get().strip().replace("$", "")
+            if val:
+                self.selected_donation_amount = val
+                for b in preset_btns.values():
+                    b.configure(fg_color=THEME["bg_card_alt"], text_color=THEME["text_secondary"])
+                btn_donate_action.configure(text=f"🌐 Donate via PayPal (${val})")
 
-        btn_copy = ctk.CTkButton(
-            btn_row,
-            text="📋 Copy PayPal Email",
-            font=ctk.CTkFont(family=THEME["font_family"], size=12),
-            fg_color=THEME["bg_card_alt"],
-            hover_color=THEME["border_highlight"],
-            command=lambda: self._copy_to_clipboard(PAYPAL_EMAIL, dialog)
-        )
-        btn_copy.pack(side="left", padx=6)
+        custom_entry.bind("<KeyRelease>", _on_custom_change)
 
-        btn_open_paypal = ctk.CTkButton(
-            btn_row,
-            text="🌐 Donate Directly via PayPal",
-            font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
+        # PayPal Execution Action
+        def _launch_paypal():
+            amt = self.selected_donation_amount or "3.00"
+            try:
+                amt_float = float(amt)
+                formatted_amt = f"{amt_float:.2f}"
+            except ValueError:
+                formatted_amt = "3.00"
+            url = f"{PAYPAL_DONATION_BASE_URL}&amount={formatted_amt}"
+            webbrowser.open(url)
+
+        btn_donate_action = ctk.CTkButton(
+            dialog,
+            text=f"🌐 Donate via PayPal (${default_amount})",
+            font=ctk.CTkFont(family=THEME["font_family"], size=14, weight="bold"),
             fg_color="#0070BA",
             hover_color="#005ea6",
-            command=lambda: webbrowser.open(PAYPAL_DONATION_URL)
+            height=44,
+            corner_radius=8,
+            command=_launch_paypal
         )
-        btn_open_paypal.pack(side="left", padx=6)
+        btn_donate_action.pack(padx=30, pady=(0, 12), fill="x")
+
+        # Copy Address fallback
+        copy_row = ctk.CTkFrame(dialog, fg_color="transparent")
+        copy_row.pack(fill="x", padx=30, pady=(0, 10))
+
+        btn_copy = ctk.CTkButton(
+            copy_row,
+            text="📋 Copy PayPal Email (markvollanbarracks@gmail.com)",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            height=30,
+            command=lambda: self._copy_to_clipboard(PAYPAL_EMAIL, dialog)
+        )
+        btn_copy.pack(fill="x")
 
         ctk.CTkLabel(
             dialog,
