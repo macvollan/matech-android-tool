@@ -52,10 +52,16 @@ Counterfeit devices (fake Samsung Galaxy S24 Ultra, clone iPhone 15/16 Pro Max r
 - **Temp Dumps Cleaner:** Cleans `/data/local/tmp`, old ANR traces, and tombstones.
 - **ART Ahead-Of-Time Speed Boost:** Forces Android Runtime compiler optimization (`cmd package compile -m speed -a`) to eliminate stutter and UI lag.
 
-### 6. 🎮 Virtual Remote Control & High-Speed Mirroring
-- Silent screen capture preview using `exec-out screencap -p`.
-- Virtual hardware keypad: Power, Home, Back, App Switcher, Volume Up/Down, Menu/Unlock, Enter.
-- Remote PC-to-Phone text typing pipeline.
+### 6. 🎮 Live Screen Stream & Interactive Remote Control
+- **Real-Time Live Auto-Stream:** Continuous low-latency screen streaming without pressing manual refresh buttons. See everything happening on the phone live.
+- **Direct Touch & Click Control:** Click directly on phone screen icons, menus, and buttons to open apps and trigger actions.
+- **Drag & Swipe Gestures:** Click and drag to swipe through home screens, scroll through lists, feeds, and settings menus.
+- **Mouse Wheel Scrolling:** Use your PC mouse wheel to smoothly scroll up and down on the phone display.
+- **Android Navigation Shortcuts:** Dedicated `◀ BACK`, `● HOME`, and `■ RECENTS` navigation buttons below the screen canvas.
+- **Gesture Shortcuts:** Right-click simulates Android `BACK`, Middle-click simulates Android `HOME`.
+- **Direct PC Keyboard Input:** Type text with your computer keyboard directly into focused input fields on the device.
+- **Visual Touch Feedback:** Glowing ripple animations give instant tactile visual confirmation of your taps on screen.
+- **⚡ Ultra 60FPS Scrcpy Window:** One-click launch for full hardware-accelerated 60FPS low-latency mirroring with audio pass-through and drag-and-drop file transfers.
 
 ### 7. 📁 MTP & Windows Portable Device Explorer
 - Detects devices connected via USB cable even when **USB Debugging is OFF**.

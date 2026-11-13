@@ -906,10 +906,36 @@ class ADBManager:
         code, out, err = self.run_shell(f"input tap {x} {y}")
         return code == 0, out or err
 
-    def capture_screenshot(self, local_save_path: str) -> Tuple[bool, str]:
+    def send_screen_swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 250) -> Tuple[bool, str]:
+        """Simulates swipe/drag from (x1, y1) to (x2, y2) over duration_ms milliseconds."""
+        code, out, err = self.run_shell(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}")
+        return code == 0, out or err
+
+    def send_screen_tap_async(self, x: int, y: int):
+        """Sends screen tap asynchronously in a background daemon thread."""
+        threading.Thread(target=self.send_screen_tap, args=(x, y), daemon=True).start()
+
+    def send_screen_swipe_async(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 250):
+        """Sends screen swipe asynchronously in a background daemon thread."""
+        threading.Thread(target=self.send_screen_swipe, args=(x1, y1, x2, y2, duration_ms), daemon=True).start()
+
+    def send_keyevent_async(self, keycode: int):
+        """Sends hardware keyevent asynchronously in a background daemon thread."""
+        threading.Thread(target=self.send_keyevent, args=(keycode,), daemon=True).start()
+
+    def get_screen_resolution(self) -> Optional[Tuple[int, int]]:
+        """Queries physical screen resolution (width, height) via wm size."""
+        code, out, _ = self.run_shell("wm size")
+        if code == 0 and out:
+            m = re.search(r'(?:Physical size|Override size):\s*(\d+)x(\d+)', out)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+        return None
+
+    def capture_screen_bytes(self) -> Optional[bytes]:
         """
-        Captures live screenshot from device silently and saves to PC.
-        Uses binary adb exec-out screencap -p for maximum speed.
+        Captures live screen frame directly in memory without writing to disk.
+        Uses binary adb exec-out screencap -p for maximum responsiveness.
         """
         startupinfo, creationflags = self._get_silent_startupinfo()
         full_cmd = [self.adb_path]
@@ -921,20 +947,103 @@ class ADBManager:
             res = subprocess.run(
                 full_cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=15,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
                 startupinfo=startupinfo,
                 creationflags=creationflags
             )
             if res.returncode == 0 and len(res.stdout) > 1000:
+                return res.stdout
+        except Exception:
+            pass
+        return None
+
+    def capture_screenshot(self, local_save_path: str) -> Tuple[bool, str]:
+        """
+        Captures live screenshot from device silently and saves to PC.
+        Uses binary adb exec-out screencap -p for maximum speed.
+        """
+        raw_bytes = self.capture_screen_bytes()
+        if raw_bytes:
+            try:
                 with open(local_save_path, "wb") as f:
-                    f.write(res.stdout)
+                    f.write(raw_bytes)
                 return True, local_save_path
-            else:
-                # Fallback to screencap to /sdcard/screen.png + pull
-                self.run_shell("screencap -p /sdcard/mactech_screen.png")
-                p_code, _, _ = self.run_adb(["pull", "/sdcard/mactech_screen.png", local_save_path])
-                self.run_shell("rm /sdcard/mactech_screen.png")
-                return p_code == 0, local_save_path if p_code == 0 else "Screenshot capture failed."
+            except Exception as e:
+                return False, str(e)
+
+        # Fallback to screencap to /sdcard/screen.png + pull
+        self.run_shell("screencap -p /sdcard/mactech_screen.png")
+        p_code, _, _ = self.run_adb(["pull", "/sdcard/mactech_screen.png", local_save_path])
+        self.run_shell("rm /sdcard/mactech_screen.png")
+        return p_code == 0, local_save_path if p_code == 0 else "Screenshot capture failed."
+
+    def get_scrcpy_path(self) -> Optional[str]:
+        """Locates bundled or system-installed scrcpy.exe."""
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        # 1. Check local bin/
+        bundled = os.path.join(base_dir, "bin", "scrcpy.exe")
+        if os.path.exists(bundled):
+            return bundled
+
+        # 2. Check WinGet Packages
+        winget_path = r"C:\Users\HomePC\AppData\Local\Microsoft\WinGet\Packages\Genymobile.scrcpy_Microsoft.Winget.Source_8wekyb3d8bbwe\scrcpy-win64-v5.0.1\scrcpy.exe"
+        if os.path.exists(winget_path):
+            return winget_path
+
+        # 3. Check system PATH
+        from shutil import which
+        sys_path = which("scrcpy")
+        if sys_path:
+            return sys_path
+
+        return None
+
+    def launch_scrcpy(self, stay_awake: bool = True, turn_screen_off: bool = False, always_on_top: bool = False, extra_args: Optional[List[str]] = None) -> Tuple[bool, str]:
+        """
+        Launches Scrcpy for full hardware-accelerated 60fps mirror & remote keyboard/mouse control.
+        """
+        scrcpy_bin = self.get_scrcpy_path()
+        if not scrcpy_bin:
+            return False, "scrcpy.exe was not found. Please ensure it is present in bin/."
+
+        cmd = [scrcpy_bin]
+        if self.selected_device:
+            cmd.extend(["-s", self.selected_device])
+        if stay_awake:
+            cmd.append("--stay-awake")
+        if turn_screen_off:
+            cmd.append("--turn-screen-off")
+        if always_on_top:
+            cmd.append("--always-on-top")
+
+        cmd.extend([
+            "--window-title=MacTech Android Live Mirror",
+            "--max-size=1600",
+            "--video-bit-rate=8M"
+        ])
+
+        if extra_args:
+            cmd.extend(extra_args)
+
+        env = os.environ.copy()
+        env["ADB"] = self.adb_path
+        scrcpy_dir = os.path.dirname(scrcpy_bin)
+        env["PATH"] = scrcpy_dir + os.pathsep + env.get("PATH", "")
+
+        startupinfo, creationflags = self._get_silent_startupinfo()
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                env=env,
+                cwd=scrcpy_dir,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
+            return True, f"Scrcpy 60FPS Ultra Mirror launched successfully (PID: {proc.pid})."
         except Exception as e:
-            return False, str(e)
+            return False, f"Failed to launch scrcpy: {e}"

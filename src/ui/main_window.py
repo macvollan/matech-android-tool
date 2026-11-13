@@ -6,10 +6,11 @@ Modern, high-performance, dark forensic interface using CustomTkinter
 
 import os
 import sys
+import io
 import webbrowser
 import threading
 import time
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from tkinter import filedialog, messagebox
 import tkinter as tk
 
@@ -66,11 +67,30 @@ class MainWindow(ctk.CTk if ctk else object):
         self.current_cmd_category: str = "All Commands"
         self.selected_donation_amount: str = DEFAULT_DONATION_AMOUNT
 
+        # Live screen streaming & remote touch interaction state
+        self.live_stream_active: bool = False
+        self.live_stream_paused: bool = False
+        self.live_stream_thread: Optional[threading.Thread] = None
+        self.current_screen_img: Optional[Image.Image] = None
+        self.screen_render_rect: Optional[Tuple[int, int, int, int]] = None  # (offset_x, offset_y, rendered_w, rendered_h)
+        self.device_screen_size: Tuple[int, int] = (1080, 2400)
+        self.touch_start_canvas: Optional[Tuple[int, int]] = None
+        self.touch_start_phone: Optional[Tuple[int, int]] = None
+        self.touch_start_time: float = 0.0
+        self.stream_fps: float = 0.0
+        self._canvas_img_id = None
+        self._canvas_photo = None
+        self._quick_refresh_scheduled: bool = False
+        self._is_capturing_stream_frame: bool = False
+
         # Setup GUI Components
         self._setup_layout()
         self._setup_sidebar()
         self._setup_topbar()
         self._setup_content_area()
+
+        # Handle window close
+        self.protocol("WM_DELETE_WINDOW", self._on_close_window)
 
         # Load initial view
         self.show_view("dashboard")
@@ -297,7 +317,18 @@ class MainWindow(ctk.CTk if ctk else object):
         for widget in self.content_container.winfo_children():
             widget.destroy()
 
+    def _on_close_window(self):
+        self.is_monitoring = False
+        self.live_stream_active = False
+        self.live_stream_paused = True
+        self.destroy()
+
     def show_view(self, view_name: str):
+        if view_name != "remote" and self.live_stream_active and not self.live_stream_paused:
+            self.live_stream_paused = True
+        elif view_name == "remote" and self.live_stream_active and self.live_stream_paused:
+            self.live_stream_paused = False
+
         views = {
             "dashboard": self.show_dashboard,
             "current_app": self.show_current_app,
@@ -1335,67 +1366,234 @@ class MainWindow(ctk.CTk if ctk else object):
         self._highlight_nav("remote")
         self._clear_content()
 
+        # Reset canvas image references
+        self._canvas_img_id = None
+        self._canvas_photo = None
+        self.screen_render_rect = None
+
         container = ctk.CTkFrame(self.content_container, fg_color="transparent")
         container.pack(fill="both", expand=True)
 
+        # Header with Title and Streaming Controls
         h_box = ctk.CTkFrame(container, fg_color="transparent")
-        h_box.pack(fill="x", pady=(0, 12))
+        h_box.pack(fill="x", pady=(0, 10))
+
+        title_box = ctk.CTkFrame(h_box, fg_color="transparent")
+        title_box.pack(side="left")
 
         ctk.CTkLabel(
-            h_box,
-            text="🎮 Remote Phone Control, Virtual Buttons & Screen Mirror",
+            title_box,
+            text="🎮 Live Phone Screen & Interactive Remote Control",
             font=ctk.CTkFont(family=THEME["font_family"], size=20, weight="bold"),
             text_color=THEME["text_main"]
-        ).pack(side="left")
+        ).pack(anchor="w")
 
+        ctk.CTkLabel(
+            title_box,
+            text="Live auto-streaming display • Direct touch clicks, swipes & gestures • Virtual hardware controls",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            text_color=THEME["text_muted"]
+        ).pack(anchor="w")
+
+        # Header Right Actions (Status pill, Pause/Resume, Sync, 60FPS Scrcpy Popout)
+        ctrl_top = ctk.CTkFrame(h_box, fg_color="transparent")
+        ctrl_top.pack(side="right")
+
+        self.lbl_stream_badge = ctk.CTkLabel(
+            ctrl_top,
+            text="● LIVE STREAMING",
+            font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
+            text_color=THEME["success"]
+        )
+        self.lbl_stream_badge.pack(side="left", padx=(0, 8))
+
+        self.btn_stream_toggle = ctk.CTkButton(
+            ctrl_top,
+            text="⏸️ Pause Stream",
+            width=100,
+            height=32,
+            font=ctk.CTkFont(family=THEME["font_family"], size=11, weight="bold"),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            command=self._toggle_live_stream
+        )
+        self.btn_stream_toggle.pack(side="left", padx=4)
+
+        self.btn_sync_frame = ctk.CTkButton(
+            ctrl_top,
+            text="🔄 Sync Screen",
+            width=90,
+            height=32,
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            command=lambda: self._trigger_quick_refresh(0)
+        )
+        self.btn_sync_frame.pack(side="left", padx=4)
+
+        self.btn_scrcpy_popout = ctk.CTkButton(
+            ctrl_top,
+            text="⚡ Ultra 60FPS (Scrcpy)",
+            height=32,
+            font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
+            fg_color="#0284C7",
+            hover_color="#0369A1",
+            command=self._launch_scrcpy_mirror
+        )
+        self.btn_scrcpy_popout.pack(side="left", padx=(6, 0))
+
+        # Main 2-Column Responsive Workspace
         content_split = ctk.CTkFrame(container, fg_color="transparent")
         content_split.pack(fill="both", expand=True)
-        content_split.grid_columnconfigure(0, weight=1)
+        content_split.grid_columnconfigure(0, weight=0, minsize=380)
         content_split.grid_columnconfigure(1, weight=1)
+        content_split.grid_rowconfigure(0, weight=1)
 
-        # Left: Screen Grab / Mirror Viewer
-        mirror_card = ctk.CTkFrame(content_split, fg_color=THEME["bg_card"], border_width=1, border_color=THEME["border"], corner_radius=10)
-        mirror_card.grid(row=0, column=0, padx=(0, 8), sticky="nsew")
-
-        ctk.CTkLabel(mirror_card, text="📱 High-Speed Screen Grab", font=ctk.CTkFont(family=THEME["font_family"], size=14, weight="bold"), text_color=THEME["text_main"]).pack(anchor="w", padx=16, pady=(12, 6))
-
-        self.screen_preview_lbl = ctk.CTkLabel(
-            mirror_card,
-            text="Click 'Capture Screen' to preview device display...",
-            font=ctk.CTkFont(family=THEME["font_family"], size=12),
-            text_color=THEME["text_muted"]
+        # -------------------------------------------------------------
+        # Left Panel: Smartphone Frame Mockup + Interactive Live Canvas
+        # -------------------------------------------------------------
+        phone_card = ctk.CTkFrame(
+            content_split,
+            fg_color=THEME["bg_card"],
+            border_width=1,
+            border_color=THEME["border"],
+            corner_radius=12
         )
-        self.screen_preview_lbl.pack(pady=40, expand=True)
+        phone_card.grid(row=0, column=0, padx=(0, 10), sticky="nsew")
+        phone_card.grid_rowconfigure(1, weight=1)
+        phone_card.grid_columnconfigure(0, weight=1)
 
-        m_btn_box = ctk.CTkFrame(mirror_card, fg_color="transparent")
-        m_btn_box.pack(fill="x", padx=16, pady=(0, 14))
+        # Top Phone Bezel Mockup
+        phone_top_bezel = ctk.CTkFrame(phone_card, fg_color="transparent", height=18)
+        phone_top_bezel.grid(row=0, column=0, sticky="ew", padx=14, pady=(8, 4))
 
-        btn_cap = ctk.CTkButton(
-            m_btn_box,
-            text="📸 Capture Screen",
-            font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
-            fg_color=THEME["primary"],
-            command=self._capture_screen_preview
+        earpiece = ctk.CTkFrame(phone_top_bezel, fg_color="#334155", width=46, height=4, corner_radius=2)
+        earpiece.pack(side="top", pady=2)
+
+        # Interactive Canvas for Direct Touch & Screen View
+        self.phone_canvas = tk.Canvas(
+            phone_card,
+            bg="#06090F",
+            highlightthickness=1,
+            highlightbackground=THEME["border"],
+            cursor="hand2",
+            takefocus=1
         )
-        btn_cap.pack(side="left", padx=(0, 10))
+        self.phone_canvas.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 6))
 
-        btn_save_cap = ctk.CTkButton(
-            m_btn_box,
-            text="💾 Save Screenshot to PC",
-            font=ctk.CTkFont(family=THEME["font_family"], size=12),
+        # Canvas Touch & Gesture Bindings
+        self.phone_canvas.bind("<ButtonPress-1>", self._on_screen_touch_press)
+        self.phone_canvas.bind("<B1-Motion>", self._on_screen_touch_motion)
+        self.phone_canvas.bind("<ButtonRelease-1>", self._on_screen_touch_release)
+        self.phone_canvas.bind("<MouseWheel>", self._on_screen_wheel)
+        self.phone_canvas.bind("<Button-3>", self._on_screen_right_click)
+        self.phone_canvas.bind("<Button-2>", self._on_screen_middle_click)
+        self.phone_canvas.bind("<Key>", self._on_screen_keypress)
+        self.phone_canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # Bottom Android Nav Bar (Physical button simulation)
+        nav_bar = ctk.CTkFrame(phone_card, fg_color="#0F172A", height=38, corner_radius=8)
+        nav_bar.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 6))
+        nav_bar.grid_columnconfigure((0, 1, 2), weight=1)
+
+        btn_nav_back = ctk.CTkButton(
+            nav_bar,
+            text="◀  BACK",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11, weight="bold"),
+            fg_color="transparent",
+            hover_color="#1E293B",
+            text_color=THEME["text_secondary"],
+            height=30,
+            command=lambda: [self.adb.send_keyevent_async(4), self._trigger_quick_refresh(120)]
+        )
+        btn_nav_back.grid(row=0, column=0, padx=2, pady=4, sticky="ew")
+
+        btn_nav_home = ctk.CTkButton(
+            nav_bar,
+            text="●  HOME",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11, weight="bold"),
+            fg_color="transparent",
+            hover_color="#1E293B",
+            text_color=THEME["text_secondary"],
+            height=30,
+            command=lambda: [self.adb.send_keyevent_async(3), self._trigger_quick_refresh(120)]
+        )
+        btn_nav_home.grid(row=0, column=1, padx=2, pady=4, sticky="ew")
+
+        btn_nav_recents = ctk.CTkButton(
+            nav_bar,
+            text="■  RECENTS",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11, weight="bold"),
+            fg_color="transparent",
+            hover_color="#1E293B",
+            text_color=THEME["text_secondary"],
+            height=30,
+            command=lambda: [self.adb.send_keyevent_async(187), self._trigger_quick_refresh(120)]
+        )
+        btn_nav_recents.grid(row=0, column=2, padx=2, pady=4, sticky="ew")
+
+        # Quick Action Toolbar beneath Nav Bar
+        tools_row = ctk.CTkFrame(phone_card, fg_color="transparent")
+        tools_row.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 10))
+
+        btn_notifs = ctk.CTkButton(
+            tools_row,
+            text="🔔 Notifications",
+            font=ctk.CTkFont(family=THEME["font_family"], size=10),
             fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            height=28,
+            command=self._expand_notifications
+        )
+        btn_notifs.pack(side="left", expand=True, fill="x", padx=(0, 3))
+
+        btn_qs = ctk.CTkButton(
+            tools_row,
+            text="⚙️ Quick Settings",
+            font=ctk.CTkFont(family=THEME["font_family"], size=10),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            height=28,
+            command=self._expand_settings
+        )
+        btn_qs.pack(side="left", expand=True, fill="x", padx=3)
+
+        btn_save_shot = ctk.CTkButton(
+            tools_row,
+            text="💾 Save PNG",
+            font=ctk.CTkFont(family=THEME["font_family"], size=10),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            height=28,
             command=self._save_screenshot_dialog
         )
-        btn_save_cap.pack(side="left")
+        btn_save_shot.pack(side="left", expand=True, fill="x", padx=(3, 0))
 
-        # Right: Virtual Remote Keys & Text Typer
-        remote_card = ctk.CTkFrame(content_split, fg_color=THEME["bg_card"], border_width=1, border_color=THEME["border"], corner_radius=10)
-        remote_card.grid(row=0, column=1, padx=(8, 0), sticky="nsew")
+        # -------------------------------------------------------------
+        # Right Panel: Hardware Keypad, Quick Controls, Typer & Guide
+        # -------------------------------------------------------------
+        remote_card = ctk.CTkFrame(
+            content_split,
+            fg_color=THEME["bg_card"],
+            border_width=1,
+            border_color=THEME["border"],
+            corner_radius=12
+        )
+        remote_card.grid(row=0, column=1, padx=(10, 0), sticky="nsew")
 
-        ctk.CTkLabel(remote_card, text="🕹️ Virtual Hardware Keypad", font=ctk.CTkFont(family=THEME["font_family"], size=14, weight="bold"), text_color=THEME["text_main"]).pack(anchor="w", padx=16, pady=(12, 10))
+        scroll_right = ctk.CTkScrollableFrame(remote_card, fg_color="transparent")
+        scroll_right.pack(fill="both", expand=True, padx=12, pady=12)
 
-        key_grid = ctk.CTkFrame(remote_card, fg_color="transparent")
-        key_grid.pack(fill="x", padx=16, pady=(0, 16))
+        # 1. Virtual Hardware Keypad
+        ctk.CTkLabel(
+            scroll_right,
+            text="🕹️ Virtual Hardware Keypad",
+            font=ctk.CTkFont(family=THEME["font_family"], size=14, weight="bold"),
+            text_color=THEME["text_main"]
+        ).pack(anchor="w", pady=(0, 8))
+
+        key_grid = ctk.CTkFrame(scroll_right, fg_color="transparent")
+        key_grid.pack(fill="x", pady=(0, 14))
         key_grid.grid_columnconfigure((0, 1, 2), weight=1)
 
         keys = [
@@ -1419,67 +1617,539 @@ class MainWindow(ctk.CTk if ctk else object):
                 font=ctk.CTkFont(family=THEME["font_family"], size=11),
                 fg_color=color,
                 height=34,
-                command=lambda kc=code: self.adb.send_keyevent(kc)
+                command=lambda kc=code: [self.adb.send_keyevent_async(kc), self._trigger_quick_refresh(120)]
             )
             btn.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
 
-        # Quick Text Input Typer
-        ctk.CTkLabel(remote_card, text="⌨️ Send Text Input to Active Field", font=ctk.CTkFont(family=THEME["font_family"], size=14, weight="bold"), text_color=THEME["text_main"]).pack(anchor="w", padx=16, pady=(10, 6))
+        # 2. System Quick Controls
+        ctk.CTkLabel(
+            scroll_right,
+            text="⚡ System Quick Actions",
+            font=ctk.CTkFont(family=THEME["font_family"], size=14, weight="bold"),
+            text_color=THEME["text_main"]
+        ).pack(anchor="w", pady=(4, 8))
 
-        type_box = ctk.CTkFrame(remote_card, fg_color="transparent")
-        type_box.pack(fill="x", padx=16, pady=(0, 16))
+        sys_actions_box = ctk.CTkFrame(scroll_right, fg_color="transparent")
+        sys_actions_box.pack(fill="x", pady=(0, 14))
+        sys_actions_box.grid_columnconfigure((0, 1), weight=1)
+
+        btn_wake_unlock = ctk.CTkButton(
+            sys_actions_box,
+            text="🔓 Wake & Dismiss Lock",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11, weight="bold"),
+            fg_color=THEME["primary"],
+            hover_color=THEME["primary_hover"],
+            height=32,
+            command=lambda: [self.adb.attempt_force_usb_debugging(), self._trigger_quick_refresh(200)]
+        )
+        btn_wake_unlock.grid(row=0, column=0, padx=4, pady=3, sticky="ew")
+
+        btn_rotate = ctk.CTkButton(
+            sys_actions_box,
+            text="🔄 Rotate Display (90°)",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            height=32,
+            command=self._rotate_screen
+        )
+        btn_rotate.grid(row=0, column=1, padx=4, pady=3, sticky="ew")
+
+        btn_paste_clip = ctk.CTkButton(
+            sys_actions_box,
+            text="📋 Paste PC Clipboard to Phone",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            height=32,
+            command=self._paste_clipboard_to_phone
+        )
+        btn_paste_clip.grid(row=1, column=0, padx=4, pady=3, sticky="ew")
+
+        btn_sleep_screen = ctk.CTkButton(
+            sys_actions_box,
+            text="⏹️ Toggle Screen On/Off",
+            font=ctk.CTkFont(family=THEME["font_family"], size=11),
+            fg_color=THEME["bg_card_alt"],
+            hover_color=THEME["border_highlight"],
+            height=32,
+            command=self._turn_screen_off
+        )
+        btn_sleep_screen.grid(row=1, column=1, padx=4, pady=3, sticky="ew")
+
+        # 3. Quick Text Input Typer
+        ctk.CTkLabel(
+            scroll_right,
+            text="⌨️ Type Text into Active Phone Field",
+            font=ctk.CTkFont(family=THEME["font_family"], size=14, weight="bold"),
+            text_color=THEME["text_main"]
+        ).pack(anchor="w", pady=(4, 6))
+
+        type_box = ctk.CTkFrame(scroll_right, fg_color="transparent")
+        type_box.pack(fill="x", pady=(0, 14))
 
         self.type_entry = ctk.CTkEntry(
             type_box,
-            placeholder_text="Type text here and hit 'Send' to type on phone...",
-            height=34,
+            placeholder_text="Type text here and hit 'Send' or Press Enter to type on phone...",
+            height=36,
             fg_color=THEME["bg_input"],
             border_color=THEME["border"]
         )
         self.type_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.type_entry.bind("<Return>", lambda e: self._send_keyboard_text())
 
         btn_send_type = ctk.CTkButton(
             type_box,
             text="Send",
             width=70,
-            height=34,
+            height=36,
             font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
             fg_color=THEME["primary"],
+            hover_color=THEME["primary_hover"],
             command=self._send_keyboard_text
         )
         btn_send_type.pack(side="right")
 
-    def _capture_screen_preview(self):
-        tmp_path = os.path.join(os.environ.get("TEMP", "."), "mactech_screen_tmp.png")
-        def _cap():
-            ok, res = self.adb.capture_screenshot(tmp_path)
-            if ok and os.path.exists(tmp_path):
-                try:
-                    img = Image.open(tmp_path)
-                    # Resize proportionally for preview card
-                    img.thumbnail((300, 480))
-                    ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=img.size)
-                    self.after(0, lambda: self.screen_preview_lbl.configure(image=ctk_img, text=""))
-                except Exception as e:
-                    self.after(0, lambda: self.screen_preview_lbl.configure(text=f"Error displaying preview: {e}"))
+        # 4. Interactive Touch Controls Guide Card
+        guide_card = ctk.CTkFrame(
+            scroll_right,
+            fg_color=THEME["bg_card_alt"],
+            border_width=1,
+            border_color=THEME["border"],
+            corner_radius=10
+        )
+        guide_card.pack(fill="x", pady=(6, 0))
+
+        ctk.CTkLabel(
+            guide_card,
+            text="💡 Interactive Screen Controls Guide",
+            font=ctk.CTkFont(family=THEME["font_family"], size=12, weight="bold"),
+            text_color=THEME["accent_cyan"]
+        ).pack(anchor="w", padx=14, pady=(10, 6))
+
+        guide_items = [
+            ("👆 Left Click", "Taps directly on app icons, buttons, menus, links & toggles on the phone screen."),
+            ("🖐️ Click & Drag", "Swipes up, down, left, right to scroll feeds, switch home pages, or pull notifications."),
+            ("📜 Mouse Wheel", "Instantly scrolls content up and down anywhere on the screen."),
+            ("🔙 Right Click", "Simulates Android BACK button instantly on click."),
+            ("🏠 Middle Click", "Simulates Android HOME button instantly on click."),
+            ("⌨️ Keyboard Focus", "Click the screen and type with PC keyboard directly into text boxes on phone."),
+            ("⚡ Ultra 60FPS", "Click 'Ultra 60FPS (Scrcpy)' at top right for hardware-accelerated zero-latency mirror with audio.")
+        ]
+
+        for title, desc in guide_items:
+            item_box = ctk.CTkFrame(guide_card, fg_color="transparent")
+            item_box.pack(fill="x", padx=14, pady=2)
+            ctk.CTkLabel(
+                item_box,
+                text=title + ":",
+                font=ctk.CTkFont(family=THEME["font_family"], size=11, weight="bold"),
+                text_color=THEME["text_main"],
+                width=120,
+                anchor="w"
+            ).pack(side="left")
+            ctk.CTkLabel(
+                item_box,
+                text=desc,
+                font=ctk.CTkFont(family=THEME["font_family"], size=11),
+                text_color=THEME["text_secondary"],
+                anchor="w",
+                wraplength=480,
+                justify="left"
+            ).pack(side="left", fill="x", expand=True)
+
+        guide_spacer = ctk.CTkLabel(guide_card, text="", height=4)
+        guide_spacer.pack()
+
+        # Start live stream automatically!
+        self._ensure_live_stream_started()
+
+    # =========================================================================
+    # Live Screen Streaming & Direct Touch Input Engine
+    # =========================================================================
+
+    def _ensure_live_stream_started(self):
+        """Starts background live stream worker if not already running."""
+        self.live_stream_active = True
+        self.live_stream_paused = False
+        if not self.live_stream_thread or not self.live_stream_thread.is_alive():
+            self.live_stream_thread = threading.Thread(target=self._live_stream_loop, daemon=True)
+            self.live_stream_thread.start()
+        self._update_stream_badge(True)
+
+    def _toggle_live_stream(self):
+        """Toggles between pause and resume for the live screen stream."""
+        self.live_stream_paused = not self.live_stream_paused
+        if not self.live_stream_paused:
+            self._ensure_live_stream_started()
+            if hasattr(self, "btn_stream_toggle") and self.btn_stream_toggle.winfo_exists():
+                self.btn_stream_toggle.configure(text="⏸️ Pause Stream", fg_color=THEME["bg_card_alt"])
+            self._update_stream_badge(True)
+            self._trigger_quick_refresh(0)
+        else:
+            if hasattr(self, "btn_stream_toggle") and self.btn_stream_toggle.winfo_exists():
+                self.btn_stream_toggle.configure(text="▶️ Resume Stream", fg_color=THEME["primary"])
+            self._update_stream_badge(False)
+
+    def _update_stream_badge(self, is_live: bool, fps_str: str = ""):
+        if hasattr(self, "lbl_stream_badge") and self.lbl_stream_badge.winfo_exists():
+            if is_live and not self.live_stream_paused:
+                txt = f"● LIVE ({fps_str})" if fps_str else "● LIVE STREAMING"
+                self.lbl_stream_badge.configure(text=txt, text_color=THEME["success"])
+            elif self.live_stream_paused:
+                self.lbl_stream_badge.configure(text="⏸️ PAUSED", text_color=THEME["warning"])
             else:
-                self.after(0, lambda: self.screen_preview_lbl.configure(text="Screenshot capture failed.\nEnsure device is unlocked."))
-        threading.Thread(target=_cap, daemon=True).start()
+                self.lbl_stream_badge.configure(text="● OFFLINE", text_color=THEME["text_muted"])
+
+    def _live_stream_loop(self):
+        """Continuously streams screen frames from connected device silently."""
+        fps_count = 0
+        fps_timer = time.time()
+
+        while self.live_stream_active:
+            if self.live_stream_paused or self.current_view_name != "remote":
+                time.sleep(0.25)
+                continue
+
+            conn = self.status_data.get("connection", "DISCONNECTED")
+            if conn not in ["AUTHORIZED", "device"]:
+                self.after(0, self._render_stream_placeholder, "📱 Waiting for Authorized Device...\nConnect phone and tap 'Allow USB Debugging' on screen.")
+                time.sleep(1.0)
+                continue
+
+            try:
+                self._is_capturing_stream_frame = True
+                raw_bytes = self.adb.capture_screen_bytes()
+                self._is_capturing_stream_frame = False
+
+                if raw_bytes and self.live_stream_active and not self.live_stream_paused and self.current_view_name == "remote":
+                    img = Image.open(io.BytesIO(raw_bytes))
+
+                    fps_count += 1
+                    elapsed = time.time() - fps_timer
+                    fps_val = self.stream_fps
+                    if elapsed >= 1.0:
+                        fps_val = round(fps_count / elapsed, 1)
+                        self.stream_fps = fps_val
+                        fps_count = 0
+                        fps_timer = time.time()
+
+                    self.after(0, self._render_live_stream_frame, img, f"{fps_val} FPS")
+                else:
+                    time.sleep(0.08)
+            except Exception:
+                self._is_capturing_stream_frame = False
+                time.sleep(0.15)
+
+            # Smooth pacing
+            time.sleep(0.04)
+
+    def _render_live_stream_frame(self, img: Image.Image, fps_str: str = ""):
+        """Renders live PIL Image frame to the Canvas proportionally."""
+        if not hasattr(self, "phone_canvas") or not self.phone_canvas.winfo_exists():
+            return
+
+        self.current_screen_img = img
+        self.device_screen_size = (img.width, img.height)
+        self._update_stream_badge(True, fps_str)
+
+        canvas_w = self.phone_canvas.winfo_width()
+        canvas_h = self.phone_canvas.winfo_height()
+        if canvas_w < 50 or canvas_h < 50:
+            canvas_w = 320
+            canvas_h = 560
+
+        # Scale image proportionally to fit canvas bounds
+        scale = min((canvas_w - 6) / img.width, (canvas_h - 6) / img.height)
+        target_w = max(1, int(img.width * scale))
+        target_h = max(1, int(img.height * scale))
+
+        scaled_img = img.resize((target_w, target_h), Image.Resampling.BILINEAR)
+        photo = ImageTk.PhotoImage(scaled_img)
+        self._canvas_photo = photo  # Keep reference to prevent GC
+
+        center_x = canvas_w // 2
+        center_y = canvas_h // 2
+        offset_x = center_x - (target_w // 2)
+        offset_y = center_y - (target_h // 2)
+        self.screen_render_rect = (offset_x, offset_y, target_w, target_h)
+
+        # Clear placeholder if present
+        self.phone_canvas.delete("placeholder")
+
+        if self._canvas_img_id is None:
+            self._canvas_img_id = self.phone_canvas.create_image(
+                center_x, center_y,
+                image=photo,
+                anchor="center",
+                tags="screen_frame"
+            )
+        else:
+            self.phone_canvas.itemconfig(self._canvas_img_id, image=photo)
+            self.phone_canvas.coords(self._canvas_img_id, center_x, center_y)
+
+    def _render_stream_placeholder(self, msg: str):
+        """Draws offline / waiting message on the canvas."""
+        if not hasattr(self, "phone_canvas") or not self.phone_canvas.winfo_exists():
+            return
+        self._update_stream_badge(False)
+        if self._canvas_img_id:
+            self.phone_canvas.delete(self._canvas_img_id)
+            self._canvas_img_id = None
+        self.phone_canvas.delete("placeholder")
+        cw = self.phone_canvas.winfo_width() or 320
+        ch = self.phone_canvas.winfo_height() or 560
+        self.phone_canvas.create_text(
+            cw // 2, ch // 2,
+            text=msg,
+            fill=THEME["text_secondary"],
+            font=(THEME["font_family"], 11),
+            justify="center",
+            tags="placeholder"
+        )
+
+    def _on_canvas_configure(self, event):
+        """Handles canvas resizing to re-scale the active frame."""
+        if self.current_screen_img:
+            fps_lbl = f"{self.stream_fps} FPS" if self.stream_fps else ""
+            self._render_live_stream_frame(self.current_screen_img, fps_lbl)
+
+    def _on_screen_touch_press(self, event):
+        """Records initial touch press coordinate for tap vs swipe calculation."""
+        if not self.screen_render_rect or not self.device_screen_size:
+            return
+        ox, oy, rw, rh = self.screen_render_rect
+        dw, dh = self.device_screen_size
+
+        if ox <= event.x <= ox + rw and oy <= event.y <= oy + rh:
+            phone_x = int((event.x - ox) * (dw / rw))
+            phone_y = int((event.y - oy) * (dh / rh))
+            phone_x = max(0, min(dw - 1, phone_x))
+            phone_y = max(0, min(dh - 1, phone_y))
+            self.touch_start_canvas = (event.x, event.y)
+            self.touch_start_phone = (phone_x, phone_y)
+            self.touch_start_time = time.time()
+            self.phone_canvas.focus_set()
+
+    def _on_screen_touch_motion(self, event):
+        """Shows visual drag line while dragging across screen."""
+        if self.touch_start_canvas:
+            self.phone_canvas.delete("drag_line")
+            self.phone_canvas.create_line(
+                self.touch_start_canvas[0], self.touch_start_canvas[1],
+                event.x, event.y,
+                fill="#38BDF8", width=3, tags="drag_line"
+            )
+
+    def _on_screen_touch_release(self, event):
+        """Calculates touch gesture (tap vs swipe) and dispatches to Android."""
+        self.phone_canvas.delete("drag_line")
+        if not self.touch_start_canvas or not self.touch_start_phone or not self.screen_render_rect or not self.device_screen_size:
+            return
+
+        ox, oy, rw, rh = self.screen_render_rect
+        dw, dh = self.device_screen_size
+
+        clamped_x = max(ox, min(ox + rw, event.x))
+        clamped_y = max(oy, min(oy + rh, event.y))
+        phone_x = int((clamped_x - ox) * (dw / rw))
+        phone_y = int((clamped_y - oy) * (dh / rh))
+        phone_x = max(0, min(dw - 1, phone_x))
+        phone_y = max(0, min(dh - 1, phone_y))
+
+        dx = event.x - self.touch_start_canvas[0]
+        dy = event.y - self.touch_start_canvas[1]
+        dist = (dx**2 + dy**2)**0.5
+        dt = time.time() - self.touch_start_time
+
+        if dist < 10 and dt < 0.45:
+            # Single Tap on icon / button
+            self.adb.send_screen_tap_async(phone_x, phone_y)
+            self._show_touch_ripple(event.x, event.y, color="#3DDC84")
+            self._trigger_quick_refresh(120)
+        elif dist < 10 and dt >= 0.45:
+            # Long Press
+            self.adb.send_screen_swipe_async(phone_x, phone_y, phone_x, phone_y, duration_ms=650)
+            self._show_touch_ripple(event.x, event.y, color="#F59E0B")
+            self._trigger_quick_refresh(220)
+        else:
+            # Swipe / Drag gesture
+            dur = int(min(max(dt * 1000, 120), 800))
+            self.adb.send_screen_swipe_async(self.touch_start_phone[0], self.touch_start_phone[1], phone_x, phone_y, duration_ms=dur)
+            self._show_touch_ripple(event.x, event.y, color="#38BDF8")
+            self._trigger_quick_refresh(180)
+
+        self.touch_start_canvas = None
+        self.touch_start_phone = None
+
+    def _on_screen_wheel(self, event):
+        """Translates mouse wheel scroll into vertical swipe gestures."""
+        if not self.device_screen_size:
+            return
+        dw, dh = self.device_screen_size
+        cx = dw // 2
+        cy = dh // 2
+        step = int(dh * 0.28)
+
+        if event.delta < 0:
+            # Scroll down page (swipe finger up)
+            self.adb.send_screen_swipe_async(cx, cy + step, cx, cy - step, duration_ms=180)
+        else:
+            # Scroll up page (swipe finger down)
+            self.adb.send_screen_swipe_async(cx, cy - step, cx, cy + step, duration_ms=180)
+
+        self._trigger_quick_refresh(180)
+
+    def _on_screen_right_click(self, event):
+        """Right click triggers Android BACK button."""
+        self.adb.send_keyevent_async(4)  # KEYCODE_BACK
+        self._show_touch_ripple(event.x, event.y, color="#F43F5E")
+        self._trigger_quick_refresh(140)
+
+    def _on_screen_middle_click(self, event):
+        """Middle click triggers Android HOME button."""
+        self.adb.send_keyevent_async(3)  # KEYCODE_HOME
+        self._show_touch_ripple(event.x, event.y, color="#38BDF8")
+        self._trigger_quick_refresh(140)
+
+    def _on_screen_keypress(self, event):
+        """Direct keyboard input into active phone field while focused on canvas."""
+        if event.keysym == "BackSpace":
+            self.adb.send_keyevent_async(67)
+            self._trigger_quick_refresh(100)
+        elif event.keysym in ["Return", "KP_Enter"]:
+            self.adb.send_keyevent_async(66)
+            self._trigger_quick_refresh(140)
+        elif event.keysym == "Escape":
+            self.adb.send_keyevent_async(4)
+            self._trigger_quick_refresh(140)
+        elif event.keysym == "space":
+            self.adb.send_keyevent_async(62)
+            self._trigger_quick_refresh(100)
+        elif event.char and event.char.isprintable():
+            self.adb.send_text_input(event.char)
+            self._trigger_quick_refresh(100)
+
+    def _show_touch_ripple(self, x: int, y: int, color: str = "#3DDC84"):
+        """Animates a quick glowing ripple ring under cursor for tactile touch feedback."""
+        if not hasattr(self, "phone_canvas") or not self.phone_canvas.winfo_exists():
+            return
+        r = 6
+        ripple = self.phone_canvas.create_oval(x - r, y - r, x + r, y + r, outline=color, width=2)
+
+        def _expand(step=1):
+            if not hasattr(self, "phone_canvas") or not self.phone_canvas.winfo_exists():
+                return
+            if step < 4:
+                nr = r + step * 5
+                self.phone_canvas.coords(ripple, x - nr, y - nr, x + nr, y + nr)
+                self.after(35, lambda: _expand(step + 1))
+            else:
+                self.phone_canvas.delete(ripple)
+
+        self.after(30, _expand)
+
+    def _trigger_quick_refresh(self, delay_ms: int = 150):
+        """Dispatches an immediate frame capture right after touch or button action."""
+        if self._quick_refresh_scheduled:
+            return
+        self._quick_refresh_scheduled = True
+
+        def _fetch_frame():
+            self._quick_refresh_scheduled = False
+            if self.live_stream_active and not self.live_stream_paused and self.current_view_name == "remote":
+                def _grab():
+                    raw_bytes = self.adb.capture_screen_bytes()
+                    if raw_bytes:
+                        try:
+                            img = Image.open(io.BytesIO(raw_bytes))
+                            fps_lbl = f"{self.stream_fps} FPS" if self.stream_fps else ""
+                            self.after(0, self._render_live_stream_frame, img, fps_lbl)
+                        except Exception:
+                            pass
+                threading.Thread(target=_grab, daemon=True).start()
+
+        self.after(delay_ms, _fetch_frame)
+
+    def _launch_scrcpy_mirror(self):
+        """Launches full hardware-accelerated 60FPS Scrcpy Mirror with audio."""
+        ok, msg = self.adb.launch_scrcpy(stay_awake=True, turn_screen_off=False, always_on_top=True)
+        if ok:
+            messagebox.showinfo(
+                "Ultra 60FPS Scrcpy Mirror",
+                f"{msg}\n\n"
+                "Features Active:\n"
+                "• 60 FPS hardware-accelerated fluid video stream.\n"
+                "• Ultra low-latency mouse clicks, drags & keyboard typing.\n"
+                "• Phone audio forwarded to PC speakers.\n"
+                "• Drag & drop APK to install directly.\n"
+                "• Drag & drop files to push to device storage."
+            )
+        else:
+            messagebox.showerror("Scrcpy Launch Failed", msg)
+
+    def _expand_notifications(self):
+        """Pulls down Android notification panel."""
+        self.adb.run_shell("cmd statusbar expand-notifications")
+        self._trigger_quick_refresh(140)
+
+    def _expand_settings(self):
+        """Expands Android quick settings shade."""
+        self.adb.run_shell("cmd statusbar expand-settings")
+        self._trigger_quick_refresh(140)
+
+    def _rotate_screen(self):
+        """Toggles Android screen orientation (0, 90, 180, 270)."""
+        code, out, _ = self.adb.run_shell("settings get system user_rotation")
+        curr_rot = int(out.strip()) if code == 0 and out.strip().isdigit() else 0
+        next_rot = (curr_rot + 1) % 4
+        self.adb.run_shell("settings put system accelerometer_rotation 0")
+        self.adb.run_shell(f"settings put system user_rotation {next_rot}")
+        self._trigger_quick_refresh(250)
+
+    def _paste_clipboard_to_phone(self):
+        """Copies text from PC clipboard and types it into active field on phone."""
+        try:
+            clip_text = self.clipboard_get()
+            if clip_text:
+                self.adb.send_text_input(clip_text)
+                self._trigger_quick_refresh(140)
+        except Exception:
+            pass
+
+    def _turn_screen_off(self):
+        """Toggles phone screen power state."""
+        self.adb.send_keyevent_async(26)  # KEYCODE_POWER
+        self._trigger_quick_refresh(200)
 
     def _save_screenshot_dialog(self):
-        save_path = filedialog.asksaveasfilename(title="Save Screenshot", defaultextension=".png", filetypes=[("PNG Image", "*.png")])
+        """Saves current live screen frame as a PNG file to PC."""
+        save_path = filedialog.asksaveasfilename(
+            title="Save Screen Screenshot",
+            defaultextension=".png",
+            filetypes=[("PNG Image", "*.png"), ("All Files", "*.*")]
+        )
         if save_path:
+            if self.current_screen_img:
+                try:
+                    self.current_screen_img.save(save_path)
+                    messagebox.showinfo("Screenshot Saved", f"Saved successfully to:\n{save_path}")
+                    return
+                except Exception:
+                    pass
             ok, res = self.adb.capture_screenshot(save_path)
             if ok:
-                messagebox.showinfo("Saved", f"Screenshot saved to:\n{save_path}")
+                messagebox.showinfo("Screenshot Saved", f"Saved successfully to:\n{save_path}")
             else:
-                messagebox.showerror("Error", res)
+                messagebox.showerror("Error Saving Screenshot", res)
 
     def _send_keyboard_text(self):
+        """Sends text input from entry box to active phone field."""
         txt = self.type_entry.get().strip()
         if txt:
             self.adb.send_text_input(txt)
             self.type_entry.delete(0, "end")
+            self._trigger_quick_refresh(120)
 
     # =========================================================================
     # VIEW 8: Silent ADB Terminal Console
