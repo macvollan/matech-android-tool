@@ -83,6 +83,13 @@ class MainWindow(ctk.CTk if ctk else object):
         self._quick_refresh_scheduled: bool = False
         self._is_capturing_stream_frame: bool = False
 
+        # Mouse & Touchpad gesture recognition state
+        self._wheel_accum_y: float = 0.0
+        self._wheel_accum_x: float = 0.0
+        self._wheel_last_dispatch: float = 0.0
+        self._wheel_throttle_delay: float = 0.075  # ~75ms minimum throttle to prevent command backlog
+        self._wheel_job = None
+
         # Setup GUI Components
         self._setup_layout()
         self._setup_sidebar()
@@ -1481,11 +1488,14 @@ class MainWindow(ctk.CTk if ctk else object):
         )
         self.phone_canvas.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 6))
 
-        # Canvas Touch & Gesture Bindings
+        # Canvas Touch & Gesture Bindings (Mouse & Precision Touchpad)
         self.phone_canvas.bind("<ButtonPress-1>", self._on_screen_touch_press)
         self.phone_canvas.bind("<B1-Motion>", self._on_screen_touch_motion)
         self.phone_canvas.bind("<ButtonRelease-1>", self._on_screen_touch_release)
         self.phone_canvas.bind("<MouseWheel>", self._on_screen_wheel)
+        self.phone_canvas.bind("<Shift-MouseWheel>", self._on_screen_horizontal_wheel)
+        self.phone_canvas.bind("<Button-4>", lambda e: self._on_screen_wheel_discrete(e, 120))
+        self.phone_canvas.bind("<Button-5>", lambda e: self._on_screen_wheel_discrete(e, -120))
         self.phone_canvas.bind("<Button-3>", self._on_screen_right_click)
         self.phone_canvas.bind("<Button-2>", self._on_screen_middle_click)
         self.phone_canvas.bind("<Key>", self._on_screen_keypress)
@@ -1545,7 +1555,7 @@ class MainWindow(ctk.CTk if ctk else object):
             height=28,
             command=self._expand_notifications
         )
-        btn_notifs.pack(side="left", expand=True, fill="x", padx=(0, 3))
+        btn_notifs.pack(side="left", expand=True, fill="x", padx=(0, 2))
 
         btn_qs = ctk.CTkButton(
             tools_row,
@@ -1556,7 +1566,21 @@ class MainWindow(ctk.CTk if ctk else object):
             height=28,
             command=self._expand_settings
         )
-        btn_qs.pack(side="left", expand=True, fill="x", padx=3)
+        btn_qs.pack(side="left", expand=True, fill="x", padx=2)
+
+        self.btn_options_menu = ctk.CTkButton(
+            tools_row,
+            text="⋮ Options",
+            font=ctk.CTkFont(family=THEME["font_family"], size=10, weight="bold"),
+            fg_color="#8B5CF6",
+            hover_color="#7C3AED",
+            height=28,
+            command=lambda: self._show_screen_options_menu(
+                self.btn_options_menu.winfo_rootx() + self.btn_options_menu.winfo_width() // 2,
+                self.btn_options_menu.winfo_rooty()
+            )
+        )
+        self.btn_options_menu.pack(side="left", expand=True, fill="x", padx=2)
 
         btn_save_shot = ctk.CTkButton(
             tools_row,
@@ -1567,7 +1591,7 @@ class MainWindow(ctk.CTk if ctk else object):
             height=28,
             command=self._save_screenshot_dialog
         )
-        btn_save_shot.pack(side="left", expand=True, fill="x", padx=(3, 0))
+        btn_save_shot.pack(side="left", expand=True, fill="x", padx=(2, 0))
 
         # -------------------------------------------------------------
         # Right Panel: Hardware Keypad, Quick Controls, Typer & Guide
@@ -1728,10 +1752,11 @@ class MainWindow(ctk.CTk if ctk else object):
         ).pack(anchor="w", padx=14, pady=(10, 6))
 
         guide_items = [
-            ("👆 Left Click", "Taps directly on app icons, buttons, menus, links & toggles on the phone screen."),
-            ("🖐️ Click & Drag", "Swipes up, down, left, right to scroll feeds, switch home pages, or pull notifications."),
-            ("📜 Mouse Wheel", "Instantly scrolls content up and down anywhere on the screen."),
-            ("🔙 Right Click", "Simulates Android BACK button instantly on click."),
+            ("👆 Click / 1-Finger Tap", "Taps directly on app icons, buttons, menus, links & toggles on the phone screen."),
+            ("🖐️ Drag / 1-Finger Drag", "Swipes up, down, left, right to scroll feeds, switch home pages, or pull notifications."),
+            ("📜 Wheel / 2-Finger Scroll", "Smooth cursor-anchored vertical page scrolling with automatic throttling."),
+            ("↔️ Shift+Wheel / H-Scroll", "Two-finger horizontal scrolling for carousels, home screens, and app drawers."),
+            ("⋮ Right Click / 2-Finger Tap", "Opens Quick Options Context Menu (App Menu, Back, Home, Recents, Settings, Tools)."),
             ("🏠 Middle Click", "Simulates Android HOME button instantly on click."),
             ("⌨️ Keyboard Focus", "Click the screen and type with PC keyboard directly into text boxes on phone."),
             ("⚡ Ultra 60FPS", "Click 'Ultra 60FPS (Scrcpy)' at top right for hardware-accelerated zero-latency mirror with audio.")
@@ -1914,48 +1939,55 @@ class MainWindow(ctk.CTk if ctk else object):
             fps_lbl = f"{self.stream_fps} FPS" if self.stream_fps else ""
             self._render_live_stream_frame(self.current_screen_img, fps_lbl)
 
+    def _canvas_to_phone_coords(self, canvas_x: int, canvas_y: int) -> Optional[Tuple[int, int]]:
+        """Converts canvas pixel coordinates to device native resolution coordinates."""
+        if not self.screen_render_rect or not self.device_screen_size:
+            return None
+        ox, oy, rw, rh = self.screen_render_rect
+        dw, dh = self.device_screen_size
+
+        clamped_x = max(ox, min(ox + rw, canvas_x))
+        clamped_y = max(oy, min(oy + rh, canvas_y))
+        phone_x = int((clamped_x - ox) * (dw / rw))
+        phone_y = int((clamped_y - oy) * (dh / rh))
+        phone_x = max(0, min(dw - 1, phone_x))
+        phone_y = max(0, min(dh - 1, phone_y))
+        return (phone_x, phone_y)
+
     def _on_screen_touch_press(self, event):
         """Records initial touch press coordinate for tap vs swipe calculation."""
         if not self.screen_render_rect or not self.device_screen_size:
             return
         ox, oy, rw, rh = self.screen_render_rect
-        dw, dh = self.device_screen_size
 
         if ox <= event.x <= ox + rw and oy <= event.y <= oy + rh:
-            phone_x = int((event.x - ox) * (dw / rw))
-            phone_y = int((event.y - oy) * (dh / rh))
-            phone_x = max(0, min(dw - 1, phone_x))
-            phone_y = max(0, min(dh - 1, phone_y))
-            self.touch_start_canvas = (event.x, event.y)
-            self.touch_start_phone = (phone_x, phone_y)
-            self.touch_start_time = time.time()
-            self.phone_canvas.focus_set()
+            phone_coords = self._canvas_to_phone_coords(event.x, event.y)
+            if phone_coords:
+                self.touch_start_canvas = (event.x, event.y)
+                self.touch_start_phone = phone_coords
+                self.touch_start_time = time.time()
+                self.phone_canvas.focus_set()
 
     def _on_screen_touch_motion(self, event):
-        """Shows visual drag line while dragging across screen."""
+        """Shows visual drag line & arrow while dragging across screen."""
         if self.touch_start_canvas:
             self.phone_canvas.delete("drag_line")
             self.phone_canvas.create_line(
                 self.touch_start_canvas[0], self.touch_start_canvas[1],
                 event.x, event.y,
-                fill="#38BDF8", width=3, tags="drag_line"
+                fill="#38BDF8", width=3, arrow="last", tags="drag_line"
             )
 
     def _on_screen_touch_release(self, event):
-        """Calculates touch gesture (tap vs swipe) and dispatches to Android."""
+        """Calculates touch gesture (tap vs swipe vs long-press) and dispatches to Android."""
         self.phone_canvas.delete("drag_line")
         if not self.touch_start_canvas or not self.touch_start_phone or not self.screen_render_rect or not self.device_screen_size:
             return
 
-        ox, oy, rw, rh = self.screen_render_rect
-        dw, dh = self.device_screen_size
-
-        clamped_x = max(ox, min(ox + rw, event.x))
-        clamped_y = max(oy, min(oy + rh, event.y))
-        phone_x = int((clamped_x - ox) * (dw / rw))
-        phone_y = int((clamped_y - oy) * (dh / rh))
-        phone_x = max(0, min(dw - 1, phone_x))
-        phone_y = max(0, min(dh - 1, phone_y))
+        phone_coords = self._canvas_to_phone_coords(event.x, event.y)
+        if not phone_coords:
+            return
+        phone_x, phone_y = phone_coords
 
         dx = event.x - self.touch_start_canvas[0]
         dy = event.y - self.touch_start_canvas[1]
@@ -1983,28 +2015,238 @@ class MainWindow(ctk.CTk if ctk else object):
         self.touch_start_phone = None
 
     def _on_screen_wheel(self, event):
-        """Translates mouse wheel scroll into vertical swipe gestures."""
+        """Translates mouse wheel and touchpad two-finger vertical scrolling into smooth swipe gestures."""
         if not self.device_screen_size:
             return
         dw, dh = self.device_screen_size
-        cx = dw // 2
-        cy = dh // 2
-        step = int(dh * 0.28)
 
-        if event.delta < 0:
+        coords = self._canvas_to_phone_coords(event.x, event.y)
+        if coords:
+            cx, cy = coords
+        else:
+            cx = dw // 2
+            cy = dh // 2
+
+        self._wheel_accum_y += event.delta
+        now = time.time()
+
+        if (now - self._wheel_last_dispatch) >= self._wheel_throttle_delay:
+            self._dispatch_vertical_scroll(cx, cy)
+        else:
+            if self._wheel_job:
+                self.after_cancel(self._wheel_job)
+            delay_ms = int(max(20, (self._wheel_throttle_delay - (now - self._wheel_last_dispatch)) * 1000))
+            self._wheel_job = self.after(delay_ms, lambda: self._dispatch_vertical_scroll(cx, cy))
+
+    def _dispatch_vertical_scroll(self, cx: int, cy: int):
+        """Dispatches vertical scroll swipe based on accumulated delta."""
+        self._wheel_job = None
+        if not self.device_screen_size or self._wheel_accum_y == 0:
+            return
+        dw, dh = self.device_screen_size
+        delta = self._wheel_accum_y
+        self._wheel_accum_y = 0.0
+        self._wheel_last_dispatch = time.time()
+
+        abs_delta = abs(delta)
+        scale = min(0.42, max(0.12, (abs_delta / 120.0) * 0.26))
+        step = int(dh * scale)
+
+        if delta < 0:
             # Scroll down page (swipe finger up)
-            self.adb.send_screen_swipe_async(cx, cy + step, cx, cy - step, duration_ms=180)
+            y1 = min(dh - 10, cy + step // 2)
+            y2 = max(10, cy - step // 2)
+            duration = int(max(100, min(240, scale * 500)))
+            self.adb.send_screen_swipe_async(cx, y1, cx, y2, duration_ms=duration)
+            self._show_scroll_indicator(cx, cy, direction="down")
         else:
             # Scroll up page (swipe finger down)
-            self.adb.send_screen_swipe_async(cx, cy - step, cx, cy + step, duration_ms=180)
+            y1 = max(10, cy - step // 2)
+            y2 = min(dh - 10, cy + step // 2)
+            duration = int(max(100, min(240, scale * 500)))
+            self.adb.send_screen_swipe_async(cx, y1, cx, y2, duration_ms=duration)
+            self._show_scroll_indicator(cx, cy, direction="up")
 
-        self._trigger_quick_refresh(180)
+        self._trigger_quick_refresh(140)
+
+    def _on_screen_horizontal_wheel(self, event):
+        """Translates touchpad two-finger horizontal scrolling into horizontal swipe gestures."""
+        if not self.device_screen_size:
+            return
+        dw, dh = self.device_screen_size
+
+        coords = self._canvas_to_phone_coords(event.x, event.y)
+        if coords:
+            cx, cy = coords
+        else:
+            cx = dw // 2
+            cy = dh // 2
+
+        self._wheel_accum_x += event.delta
+        now = time.time()
+
+        if (now - self._wheel_last_dispatch) >= self._wheel_throttle_delay:
+            self._dispatch_horizontal_scroll(cx, cy)
+        else:
+            if self._wheel_job:
+                self.after_cancel(self._wheel_job)
+            delay_ms = int(max(20, (self._wheel_throttle_delay - (now - self._wheel_last_dispatch)) * 1000))
+            self._wheel_job = self.after(delay_ms, lambda: self._dispatch_horizontal_scroll(cx, cy))
+
+    def _dispatch_horizontal_scroll(self, cx: int, cy: int):
+        """Dispatches horizontal scroll swipe based on accumulated horizontal delta."""
+        self._wheel_job = None
+        if not self.device_screen_size or self._wheel_accum_x == 0:
+            return
+        dw, dh = self.device_screen_size
+        delta = self._wheel_accum_x
+        self._wheel_accum_x = 0.0
+        self._wheel_last_dispatch = time.time()
+
+        abs_delta = abs(delta)
+        scale = min(0.40, max(0.12, (abs_delta / 120.0) * 0.25))
+        step = int(dw * scale)
+
+        if delta < 0:
+            # Scroll right (swipe finger left)
+            x1 = min(dw - 10, cx + step // 2)
+            x2 = max(10, cx - step // 2)
+            duration = int(max(100, min(240, scale * 500)))
+            self.adb.send_screen_swipe_async(x1, cy, x2, cy, duration_ms=duration)
+            self._show_scroll_indicator(cx, cy, direction="right")
+        else:
+            # Scroll left (swipe finger right)
+            x1 = max(10, cx - step // 2)
+            x2 = min(dw - 10, cx + step // 2)
+            duration = int(max(100, min(240, scale * 500)))
+            self.adb.send_screen_swipe_async(x1, cy, x2, cy, duration_ms=duration)
+            self._show_scroll_indicator(cx, cy, direction="left")
+
+        self._trigger_quick_refresh(140)
+
+    def _on_screen_wheel_discrete(self, event, delta: int):
+        """Cross-platform wheel helper for discrete wheel events."""
+        event.delta = delta
+        self._on_screen_wheel(event)
+
+    def _show_scroll_indicator(self, phone_x: int, phone_y: int, direction: str = "down"):
+        """Displays a quick subtle scroll arrow indicator on the screen."""
+        if not hasattr(self, "phone_canvas") or not self.phone_canvas.winfo_exists() or not self.screen_render_rect:
+            return
+        ox, oy, rw, rh = self.screen_render_rect
+        dw, dh = self.device_screen_size
+        cx = ox + int(phone_x * (rw / dw))
+        cy = oy + int(phone_y * (rh / dh))
+
+        length = 16
+        if direction == "down":
+            arrow = self.phone_canvas.create_line(cx, cy - length, cx, cy + length, arrow="last", fill="#38BDF8", width=2)
+        elif direction == "up":
+            arrow = self.phone_canvas.create_line(cx, cy + length, cx, cy - length, arrow="last", fill="#38BDF8", width=2)
+        elif direction == "right":
+            arrow = self.phone_canvas.create_line(cx - length, cy, cx + length, cy, arrow="last", fill="#38BDF8", width=2)
+        else:
+            arrow = self.phone_canvas.create_line(cx + length, cy, cx - length, cy, arrow="last", fill="#38BDF8", width=2)
+
+        self.after(220, lambda: self.phone_canvas.delete(arrow) if hasattr(self, "phone_canvas") and self.phone_canvas.winfo_exists() else None)
 
     def _on_screen_right_click(self, event):
-        """Right click triggers Android BACK button."""
-        self.adb.send_keyevent_async(4)  # KEYCODE_BACK
-        self._show_touch_ripple(event.x, event.y, color="#F43F5E")
-        self._trigger_quick_refresh(140)
+        """Right click or touchpad two-finger tap opens the Quick Options Context Menu."""
+        self._show_touch_ripple(event.x, event.y, color="#38BDF8")
+        self._show_screen_options_menu(event.x_root, event.y_root)
+
+    def _show_screen_options_menu(self, root_x: int, root_y: int):
+        """Displays rich Dark-Mode Options context menu for touch and system actions."""
+        options_menu = tk.Menu(
+            self,
+            tearoff=0,
+            bg="#0F172A",
+            fg="#F8FAFC",
+            activebackground="#0284C7",
+            activeforeground="#FFFFFF",
+            activeborderwidth=0,
+            relief="solid",
+            bd=1,
+            font=(THEME["font_family"], 10)
+        )
+
+        options_menu.add_command(
+            label="  ☰  Android Options / App Menu (Key 82)",
+            command=lambda: [self.adb.send_keyevent_async(82), self._trigger_quick_refresh(120)]
+        )
+        options_menu.add_separator()
+        options_menu.add_command(
+            label="  ◀  Back (Key 4)",
+            command=lambda: [self.adb.send_keyevent_async(4), self._trigger_quick_refresh(120)]
+        )
+        options_menu.add_command(
+            label="  ●  Home (Key 3)",
+            command=lambda: [self.adb.send_keyevent_async(3), self._trigger_quick_refresh(120)]
+        )
+        options_menu.add_command(
+            label="  ■  Recent Apps (Key 187)",
+            command=lambda: [self.adb.send_keyevent_async(187), self._trigger_quick_refresh(120)]
+        )
+        options_menu.add_separator()
+        options_menu.add_command(
+            label="  🔔  Pull Notifications Shade",
+            command=self._expand_notifications
+        )
+        options_menu.add_command(
+            label="  ⚙️  Pull Quick Settings",
+            command=self._expand_settings
+        )
+        options_menu.add_separator()
+        options_menu.add_command(
+            label="  📋  Paste PC Clipboard to Phone",
+            command=self._paste_clipboard_to_phone
+        )
+        options_menu.add_command(
+            label="  💾  Save Screenshot as PNG",
+            command=self._save_screenshot_dialog
+        )
+        options_menu.add_command(
+            label="  🔒  Power / Sleep Screen (Key 26)",
+            command=lambda: [self.adb.send_keyevent_async(26), self._trigger_quick_refresh(180)]
+        )
+        options_menu.add_command(
+            label="  🔊  Volume Up (+)",
+            command=lambda: [self.adb.send_keyevent_async(24), self._trigger_quick_refresh(100)]
+        )
+        options_menu.add_command(
+            label="  🔉  Volume Down (-)",
+            command=lambda: [self.adb.send_keyevent_async(25), self._trigger_quick_refresh(100)]
+        )
+        options_menu.add_separator()
+        options_menu.add_command(
+            label="  ⚡  Launch Ultra 60FPS Scrcpy Window",
+            command=self._launch_scrcpy_mirror
+        )
+        options_menu.add_command(
+            label="  🖱️  Mouse & Touchpad Gestures Guide",
+            command=self._show_touchpad_gestures_guide
+        )
+
+        try:
+            options_menu.tk_popup(root_x, root_y)
+        finally:
+            options_menu.grab_release()
+
+    def _show_touchpad_gestures_guide(self):
+        """Shows informative modal dialog with all mouse & touchpad gesture shortcuts."""
+        guide_text = (
+            "📱 MacTech Interactive Screen & Touchpad Guide\n\n"
+            "• Single Click / 1-Finger Tap: Tap anywhere on the screen.\n"
+            "• Click & Hold / 1-Finger Hold: Long press.\n"
+            "• Click & Drag / 1-Finger Drag: Swipe / drag in any direction (blue trail).\n"
+            "• Mouse Wheel / 2-Finger Vertical Scroll: Smooth vertical page scrolling.\n"
+            "• Shift + Wheel / 2-Finger Horizontal Scroll: Horizontal carousel & app drawer scroll.\n"
+            "• Right Click / 2-Finger Tap: Opens the Quick Options Context Menu.\n"
+            "• Middle Click: Instant Home button (●).\n"
+            "• Keyboard Input: Type letters, numbers, space, backspace, and enter directly into active fields.\n"
+            "• Ultra 60FPS: Launch the bundled Scrcpy engine for full 60FPS zero-latency control."
+        )
+        messagebox.showinfo("Mouse & Touchpad Gestures", guide_text)
 
     def _on_screen_middle_click(self, event):
         """Middle click triggers Android HOME button."""
