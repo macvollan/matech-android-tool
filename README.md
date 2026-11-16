@@ -1,18 +1,28 @@
-# ⚡ MacTech Android Tool v2.2
-### *Enterprise Diagnostic, Hardware Authenticity & Forensic ADB Suite*
+# ⚡ MacTech Android Tool v2.3 (Universal Edition)
+### *Cross-Platform Hardware Forensics, Live Screen Mirroring & ADB Diagnostic Suite*
 **Engineered by MacTech Solutions Lab** | **Author:** Mark Vollan Barracks (`markvollanbarracks@gmail.com`)
 
 [![License](https://img.shields.io/badge/License-Proprietary%20%2F%20Lab-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011-brightgreen.svg)](https://microsoft.com/windows)
+[![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-brightgreen.svg)](https://mactechsolutionslab.vercel.app/products.html#mactech-android)
 [![PayPal Donate](https://img.shields.io/badge/Donate-PayPal-0070BA.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=markvollanbarracks@gmail.com&currency_code=USD&item_name=Support+MacTech+Android+Tool+Development)
 
 ---
 
 ## 📌 Overview
 
-**MacTech Android Tool** is a high-performance Windows PC application designed for computer repair technicians, digital forensics investigators, and power users. It provides low-level Android hardware interrogation, real-time app inspection, solid-state storage TRIM/defragmentation, broken-screen data extraction, and an industry-first **Forensic Fake Phone & Clone Detector**.
+**MacTech Android Tool** is a high-performance cross-platform application for **Windows**, **Linux**, and **macOS** designed for computer repair technicians, digital forensics investigators, and power users. It provides low-level Android hardware interrogation, real-time app inspection, solid-state storage TRIM/defragmentation, broken-screen data extraction, live interactive screen mirroring with touch and precision trackpad gestures, and an industry-first **Forensic Fake Phone & Clone Detector**.
 
-All ADB, MTP, and shell operations execute **completely silently** in the background using native Windows process suppression flags (`STARTF_USESHOWWINDOW` + `CREATE_NO_WINDOW`), preventing any command prompt flashing.
+All ADB, Fastboot, and shell operations execute silently in the background with process window suppression, preventing terminal flashing.
+
+---
+
+## 💻 Cross-Platform Support
+
+| Platform | Supported Environments | Quick Launch |
+| :--- | :--- | :--- |
+| **Windows** | Windows 10 & 11 (64-bit) | Run `MacTech_Android_Tool.exe` or `Launch_Tool.bat` |
+| **Linux** | Ubuntu, Debian, Arch, Fedora, openSUSE | Run `./launch_linux.sh` (or `./setup_linux.sh`) |
+| **macOS** | Apple Silicon (M1/M2/M3/M4) & Intel (macOS 10.13+) | Double-click `launch_mac.command` or `MacTech Android Tool.app` |
 
 ---
 
@@ -80,24 +90,32 @@ If this tool assisted your diagnostics or recovered valuable client data, please
 
 ---
 
-## 🛠️ Installation & Setup
+## 🛠️ Installation & Setup by Operating System
 
-### Requirements
-- Windows 10 or 11 (64-bit)
-- Python 3.10+ (if running from source)
-- Bundled with internal `adb.exe` and WinUSB drivers (no separate SDK download required).
+### 🪟 Windows (10 / 11)
+- **Standalone:** Download `MacTech_Android_Tool_v2.3_Windows.zip`, extract, and run `MacTech_Android_Tool.exe` or `Launch_Tool.bat`. Run `Trust_Publisher_And_Run.bat` to trust the MacTech Solutions Lab Authenticode certificate and bypass Windows SmartScreen.
+- **From Source:**
+  ```cmd
+  pip install -r requirements.txt
+  python main.py
+  ```
 
-```bash
-# Clone the repository
-git clone https://github.com/macvollan/mactech-android-tool.git
-cd mactech-android-tool
+### 🐧 Linux (Ubuntu / Debian / Fedora / Arch)
+- **Automated Setup:**
+  ```bash
+  chmod +x setup_linux.sh launch_linux.sh
+  ./setup_linux.sh
+  ```
+  *This automatically configures Python 3, ADB, Scrcpy, and USB udev permissions (`51-android.rules`).*
+- **Launch:** Run `./launch_linux.sh` or find **MacTech Android Tool** in your application launcher.
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Run application
-python main.py
-```
+### 🍎 macOS (Apple Silicon M1/M2/M3/M4 & Intel)
+- **Automated Setup:**
+  ```bash
+  chmod +x setup_mac.sh launch_mac.command
+  ./setup_mac.sh
+  ```
+- **Launch:** Double-click `launch_mac.command` in Finder, double-click `MacTech Android Tool.app`, or run `./launch_mac.command` in Terminal.
 
 ---
 

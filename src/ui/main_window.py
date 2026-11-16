@@ -45,10 +45,17 @@ class MainWindow(ctk.CTk if ctk else object):
         ctk.set_default_color_theme("blue")
         self.configure(fg_color=THEME["bg_main"])
 
-        # Set window icon
+        # Set window icon (Cross-platform: PNG for Linux/macOS/Windows, ICO for Windows)
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        png_path = os.path.join(base_dir, "assets", "icon.png")
         ico_path = os.path.join(base_dir, "assets", "icon.ico")
-        if os.path.exists(ico_path):
+        if os.path.exists(png_path):
+            try:
+                img = tk.PhotoImage(file=png_path)
+                self.iconphoto(True, img)
+            except Exception:
+                pass
+        elif sys.platform == "win32" and os.path.exists(ico_path):
             try:
                 self.iconbitmap(ico_path)
             except Exception:
@@ -1498,6 +1505,9 @@ class MainWindow(ctk.CTk if ctk else object):
         self.phone_canvas.bind("<Button-5>", lambda e: self._on_screen_wheel_discrete(e, -120))
         self.phone_canvas.bind("<Button-3>", self._on_screen_right_click)
         self.phone_canvas.bind("<Button-2>", self._on_screen_middle_click)
+        if sys.platform == "darwin":
+            self.phone_canvas.bind("<Button-2>", self._on_screen_right_click)
+            self.phone_canvas.bind("<Control-Button-1>", self._on_screen_right_click)
         self.phone_canvas.bind("<Key>", self._on_screen_keypress)
         self.phone_canvas.bind("<Configure>", self._on_canvas_configure)
 
@@ -2049,7 +2059,10 @@ class MainWindow(ctk.CTk if ctk else object):
         self._wheel_last_dispatch = time.time()
 
         abs_delta = abs(delta)
-        scale = min(0.42, max(0.12, (abs_delta / 120.0) * 0.26))
+        if sys.platform == "darwin":
+            scale = min(0.42, max(0.12, abs_delta * 0.12))
+        else:
+            scale = min(0.42, max(0.12, (abs_delta / 120.0) * 0.26))
         step = int(dh * scale)
 
         if delta < 0:
@@ -2104,7 +2117,10 @@ class MainWindow(ctk.CTk if ctk else object):
         self._wheel_last_dispatch = time.time()
 
         abs_delta = abs(delta)
-        scale = min(0.40, max(0.12, (abs_delta / 120.0) * 0.25))
+        if sys.platform == "darwin":
+            scale = min(0.40, max(0.12, abs_delta * 0.12))
+        else:
+            scale = min(0.40, max(0.12, (abs_delta / 120.0) * 0.25))
         step = int(dw * scale)
 
         if delta < 0:

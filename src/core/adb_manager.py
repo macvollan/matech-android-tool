@@ -14,49 +14,121 @@ import shutil
 import threading
 from typing import Dict, List, Tuple, Optional, Any
 
-# Locate bundled or system ADB binary
+# Locate bundled or system ADB binary across Windows, Linux, and macOS
 def get_adb_binary_path() -> str:
-    # 1. Check local bin/ folder relative to running script or frozen exe
+    """Finds ADB binary across Windows, macOS, and Linux."""
+    # 1. Check local bin/ folder relative to running script or frozen bundle
     if getattr(sys, 'frozen', False):
         base_dir = os.path.dirname(sys.executable)
     else:
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
-    bundled = os.path.join(base_dir, "bin", "adb.exe")
+    bin_name = "adb.exe" if sys.platform == "win32" else "adb"
+    bundled = os.path.join(base_dir, "bin", bin_name)
     if os.path.exists(bundled):
+        if sys.platform != "win32" and not os.access(bundled, os.X_OK):
+            try:
+                os.chmod(bundled, 0o755)
+            except Exception:
+                pass
         return bundled
     
-    # 2. Check UnlockTool or SamFw paths on disk if present
-    for alt in [
-        r"C:\UnlockTool\Binaries\adb.exe",
-        r"C:\SamFwTool\data\adb.exe",
-        r"C:\platform-tools\adb.exe"
-    ]:
+    # 2. Check system PATH via shutil.which
+    which_adb = shutil.which("adb")
+    if which_adb and os.path.exists(which_adb):
+        return which_adb
+        
+    # 3. Check standard OS-specific locations
+    candidates = []
+    if sys.platform == "win32":
+        candidates = [
+            r"C:\platform-tools\adb.exe",
+            r"C:\UnlockTool\Binaries\adb.exe",
+            r"C:\SamFwTool\data\adb.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe")
+        ]
+    elif sys.platform == "darwin":  # macOS
+        candidates = [
+            "/opt/homebrew/bin/adb",                # Apple Silicon Homebrew
+            "/usr/local/bin/adb",                   # Intel Homebrew
+            os.path.expanduser("~/Library/Android/sdk/platform-tools/adb"),
+            "/opt/local/bin/adb"                    # MacPorts
+        ]
+    else:  # Linux
+        candidates = [
+            "/usr/bin/adb",
+            "/usr/local/bin/adb",
+            os.path.expanduser("~/.android-sdk/platform-tools/adb"),
+            os.path.expanduser("~/Android/Sdk/platform-tools/adb"),
+            "/snap/bin/adb"
+        ]
+        
+    for alt in candidates:
         if os.path.exists(alt):
             return alt
             
-    # 3. Fallback to system PATH
+    # Fallback to system invocation
     return "adb"
+
+def get_fastboot_binary_path() -> str:
+    """Finds Fastboot binary across Windows, macOS, and Linux."""
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    bin_name = "fastboot.exe" if sys.platform == "win32" else "fastboot"
+    bundled = os.path.join(base_dir, "bin", bin_name)
+    if os.path.exists(bundled):
+        if sys.platform != "win32" and not os.access(bundled, os.X_OK):
+            try:
+                os.chmod(bundled, 0o755)
+            except Exception:
+                pass
+        return bundled
+        
+    which_fb = shutil.which("fastboot")
+    if which_fb and os.path.exists(which_fb):
+        return which_fb
+        
+    if sys.platform == "darwin":
+        for c in ["/opt/homebrew/bin/fastboot", "/usr/local/bin/fastboot"]:
+            if os.path.exists(c):
+                return c
+    elif sys.platform == "linux":
+        for c in ["/usr/bin/fastboot", "/usr/local/bin/fastboot", "/snap/bin/fastboot"]:
+            if os.path.exists(c):
+                return c
+                
+    return "fastboot"
 
 class ADBManager:
     """Core manager for silent ADB operations, MTP queries, diagnostics, and fake phone detection."""
     
     def __init__(self, adb_path: Optional[str] = None):
         self.adb_path = adb_path or get_adb_binary_path()
+        self.fastboot_path = get_fastboot_binary_path()
         self.selected_device: Optional[str] = None
         self._ensure_server_running()
 
-    def _get_silent_startupinfo(self) -> Tuple[subprocess.STARTUPINFO, int]:
-        """Provides Windows startupinfo flags to prevent black console windows from ever flashing."""
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
-        creationflags = subprocess.CREATE_NO_WINDOW
-        return startupinfo, creationflags
+    def _get_silent_startupinfo(self) -> Tuple[Optional[Any], int]:
+        """Provides Windows startupinfo flags to prevent black console windows from ever flashing; returns (None, 0) on Linux/macOS."""
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            return startupinfo, creationflags
+        return None, 0
 
     def run_cmd(self, cmd_args: List[str], timeout: int = 40) -> Tuple[int, str, str]:
         """Executes any command silently with no window flashing."""
         startupinfo, creationflags = self._get_silent_startupinfo()
+        kwargs = {}
+        if startupinfo:
+            kwargs["startupinfo"] = startupinfo
+        if creationflags:
+            kwargs["creationflags"] = creationflags
         try:
             proc = subprocess.run(
                 cmd_args,
@@ -66,8 +138,7 @@ class ADBManager:
                 encoding='utf-8',
                 errors='replace',
                 timeout=timeout,
-                startupinfo=startupinfo,
-                creationflags=creationflags
+                **kwargs
             )
             return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
         except subprocess.TimeoutExpired:
@@ -114,6 +185,7 @@ class ADBManager:
                 parts = shlex.split(clean_cmd)
             except Exception:
                 parts = clean_cmd.split()
+            parts[0] = self.fastboot_path
             return self.run_cmd(parts, timeout=timeout)
             
         return self.run_shell(clean_cmd, timeout=timeout, device_id=device_id)
@@ -943,17 +1015,32 @@ class ADBManager:
             full_cmd.extend(["-s", self.selected_device])
         full_cmd.extend(["exec-out", "screencap", "-p"])
 
+        kwargs = {}
+        if startupinfo:
+            kwargs["startupinfo"] = startupinfo
+        if creationflags:
+            kwargs["creationflags"] = creationflags
+
         try:
             res = subprocess.run(
                 full_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 timeout=5,
-                startupinfo=startupinfo,
-                creationflags=creationflags
+                **kwargs
             )
             if res.returncode == 0 and len(res.stdout) > 1000:
-                return res.stdout
+                raw = res.stdout
+                if raw.startswith(b"\x89PNG"):
+                    return raw
+                elif b"\x89PNG" in raw:
+                    idx = raw.find(b"\x89PNG")
+                    return raw[idx:]
+                # Fix Windows CRLF line ending corruption on stdout if present
+                fixed = raw.replace(b"\r\n", b"\n")
+                if fixed.startswith(b"\x89PNG"):
+                    return fixed
+                return raw
         except Exception:
             pass
         return None
@@ -979,27 +1066,45 @@ class ADBManager:
         return p_code == 0, local_save_path if p_code == 0 else "Screenshot capture failed."
 
     def get_scrcpy_path(self) -> Optional[str]:
-        """Locates bundled or system-installed scrcpy.exe."""
+        """Locates bundled or system-installed scrcpy across Windows, Linux, and macOS."""
         if getattr(sys, 'frozen', False):
             base_dir = os.path.dirname(sys.executable)
         else:
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
         # 1. Check local bin/
-        bundled = os.path.join(base_dir, "bin", "scrcpy.exe")
+        bin_name = "scrcpy.exe" if sys.platform == "win32" else "scrcpy"
+        bundled = os.path.join(base_dir, "bin", bin_name)
         if os.path.exists(bundled):
+            if sys.platform != "win32" and not os.access(bundled, os.X_OK):
+                try:
+                    os.chmod(bundled, 0o755)
+                except Exception:
+                    pass
             return bundled
 
-        # 2. Check WinGet Packages
-        winget_path = r"C:\Users\HomePC\AppData\Local\Microsoft\WinGet\Packages\Genymobile.scrcpy_Microsoft.Winget.Source_8wekyb3d8bbwe\scrcpy-win64-v5.0.1\scrcpy.exe"
-        if os.path.exists(winget_path):
-            return winget_path
-
-        # 3. Check system PATH
+        # 2. Check system PATH
         from shutil import which
         sys_path = which("scrcpy")
-        if sys_path:
+        if sys_path and os.path.exists(sys_path):
             return sys_path
+
+        # 3. Check OS-specific standard directories
+        if sys.platform == "win32":
+            winget_path = r"C:\Users\HomePC\AppData\Local\Microsoft\WinGet\Packages\Genymobile.scrcpy_Microsoft.Winget.Source_8wekyb3d8bbwe\scrcpy-win64-v5.0.1\scrcpy.exe"
+            if os.path.exists(winget_path):
+                return winget_path
+            for alt in [r"C:\scrcpy\scrcpy.exe", r"C:\platform-tools\scrcpy.exe"]:
+                if os.path.exists(alt):
+                    return alt
+        elif sys.platform == "darwin":
+            for alt in ["/opt/homebrew/bin/scrcpy", "/usr/local/bin/scrcpy", "/opt/local/bin/scrcpy"]:
+                if os.path.exists(alt):
+                    return alt
+        else:  # Linux
+            for alt in ["/usr/bin/scrcpy", "/usr/local/bin/scrcpy", "/snap/bin/scrcpy"]:
+                if os.path.exists(alt):
+                    return alt
 
         return None
 
@@ -1009,7 +1114,13 @@ class ADBManager:
         """
         scrcpy_bin = self.get_scrcpy_path()
         if not scrcpy_bin:
-            return False, "scrcpy.exe was not found. Please ensure it is present in bin/."
+            if sys.platform == "darwin":
+                msg = "scrcpy was not found on your Mac.\nInstall easily via Homebrew:\nbrew install scrcpy android-platform-tools"
+            elif sys.platform == "linux":
+                msg = "scrcpy was not found on your Linux system.\nInstall via package manager:\nsudo apt install scrcpy adb   (Ubuntu/Debian)\nsudo pacman -S scrcpy android-tools   (Arch)\nsudo dnf install scrcpy android-tools   (Fedora)"
+            else:
+                msg = "scrcpy.exe was not found. Please ensure it is present in bin/ or run:\nwinget install Genymobile.scrcpy"
+            return False, msg
 
         cmd = [scrcpy_bin]
         if self.selected_device:
@@ -1036,13 +1147,18 @@ class ADBManager:
         env["PATH"] = scrcpy_dir + os.pathsep + env.get("PATH", "")
 
         startupinfo, creationflags = self._get_silent_startupinfo()
+        kwargs = {}
+        if startupinfo:
+            kwargs["startupinfo"] = startupinfo
+        if creationflags:
+            kwargs["creationflags"] = creationflags
+
         try:
             proc = subprocess.Popen(
                 cmd,
                 env=env,
-                cwd=scrcpy_dir,
-                startupinfo=startupinfo,
-                creationflags=creationflags
+                cwd=scrcpy_dir if os.path.isdir(scrcpy_dir) else None,
+                **kwargs
             )
             return True, f"Scrcpy 60FPS Ultra Mirror launched successfully (PID: {proc.pid})."
         except Exception as e:

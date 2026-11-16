@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=MacTech Android Tool
+Comment=Professional Smartphone Hardware Forensics & Live ADB Control
+Exec=bash -c "cd $(dirname %k) && ./launch_linux.sh"
+Icon=assets/icon.png
+Terminal=false
+Type=Application
+Categories=Development;Utility;HardwareSettings;
+Keywords=android;adb;fastboot;scrcpy;diagnostics;forensics;
